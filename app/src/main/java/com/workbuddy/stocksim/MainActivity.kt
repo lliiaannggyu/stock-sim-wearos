@@ -328,7 +328,15 @@ class Engine(private val ctx: Context) {
             }
             return a
         } catch (_: Exception) {
-            val a = Account(); save(a); return a
+            // 读取失败不立即覆盖存档: 先备份可疑文件, 返回内存新账户, 下次交易成功后才落盘
+            try {
+                if (file().exists()) {
+                    val bak = File(ctx.filesDir, "account.json.bak")
+                    if (bak.exists()) bak.delete()
+                    file().renameTo(bak)
+                }
+            } catch (_: Exception) {}
+            return Account()
         }
     }
 
@@ -371,13 +379,17 @@ class Engine(private val ctx: Context) {
                 x.put("time", t.time); x.put("code", t.code); x.put("name", t.name)
                 x.put("side", t.side); x.put("cur", t.cur); x.put("price", t.price)
                 x.put("qty", t.qty); x.put("amount", t.amount); x.put("fee", t.fee)
-                x.put("pnl", t.pnl)
+                if (!t.pnl.isNaN()) x.put("pnl", t.pnl)   // NaN 会让 JSONObject.put 抛异常导致存档失败
                 ts.put(x)
             }
             o.put("trades", ts)
-            val f = FileOutputStream(file())
+            // 原子写入: 先写临时文件再替换, 防止进程中途被杀导致存档损坏
+            val tmp = File(ctx.filesDir, "account.json.tmp")
+            val f = FileOutputStream(tmp)
             f.write(o.toString().toByteArray(Charsets.UTF_8))
-            f.close()
+            f.flush(); f.fd.sync(); f.close()
+            if (file().exists()) file().delete()
+            tmp.renameTo(file())
         } catch (_: Exception) {}
     }
 
