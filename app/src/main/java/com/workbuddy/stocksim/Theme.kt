@@ -1,24 +1,13 @@
 package com.workbuddy.stocksim
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.dp
-import androidx.wear.compose.material.Colors
-import androidx.wear.compose.material.ScalingLazyListState
+import androidx.wear.compose.material3.ColorScheme
+import androidx.wear.compose.material3.MaterialTheme
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cbrt
@@ -27,13 +16,14 @@ import kotlin.math.pow
 import kotlin.math.sin
 
 /* ============================================================
- * 主题系统 —— 移植自 llx 的 AppOpsPro (ThemeSeed + SeedColorScheme)
+ * 主题系统 —— 移植自 AppOpsPro (ThemeSeed + SeedColorScheme + Theme)
+ * Wear Compose Material 3 (M3E) ColorScheme,
  * 由种子色在 Lab 空间生成整套官方色阶风格的深色配色。
  * ============================================================ */
 
-/** 种子色选项 (Material 500 档)，与 AppOpsPro 一致。 */
+/** 种子色选项 (Material 500 档)，与 AppOpsPro 一致。seed=null 表示默认中性灰。 */
 enum class ThemeSeed(val id: String, val label: String, val seed: Color?) {
-    Default("default", "默认", Color(0xFF8D9199)),  // 原始中性灰
+    Default("default", "默认", null),
     Purple("purple", "紫", Color(0xFF6750A4)),
     Indigo("indigo", "靛", Color(0xFF3F51B5)),
     Blue("blue", "蓝", Color(0xFF2196F3)),
@@ -54,75 +44,98 @@ enum class ThemeSeed(val id: String, val label: String, val seed: Color?) {
     }
 }
 
-/** 应用配色方案（组合期可通过状态读取，切换主题即时生效）。 */
-class AppScheme(
-    val bg: Color, val surf: Color, val surfHigh: Color,
-    val txt: Color, val txtMid: Color, val txtDim: Color,
-    val pri: Color, val onPri: Color, val priDim: Color,
-    val sec: Color, val ter: Color, val onTer: Color,
-    val colors: Colors,
-)
-
-/** 当前主题（持久化由 Store 负责）。 */
+/** 当前主题（持久化由 Store 负责），切换时整棵树重组换色。 */
 var ThemeCurrent by mutableStateOf(ThemeSeed.Blue)
-var SchemeState by mutableStateOf(schemeFor(ThemeSeed.Blue))
 
-fun applyTheme(seed: ThemeSeed) {
-    ThemeCurrent = seed
-    SchemeState = schemeFor(seed)
+fun applyTheme(s: ThemeSeed) { ThemeCurrent = s }
+
+/**
+ * M3E 主题包装 (对应 AppOpsPro 的 AppOpsProTheme)。
+ * Default → 中性灰 defaultWearColorScheme；其余种子色 → colorSchemeFromSeed。
+ */
+@Composable
+fun AppTheme(content: @Composable () -> Unit) {
+    val seed = ThemeCurrent
+    val scheme = remember(seed) { colorSchemeFromSeed(seed.seed) }
+    MaterialTheme(colorScheme = scheme, content = content)
 }
 
-/** 由种子色生成整套配色。seed=null 时回落原始中性灰。 */
-fun schemeFor(seed: ThemeSeed): AppScheme {
-    val s = seed.seed
-        ?: return AppScheme(
-            bg = Color(0xFF0F0F10), surf = Color(0xFF232326), surfHigh = Color(0xFF2C2C2E),
-            txt = Color(0xFFE3E2E6), txtMid = Color(0xFFC4C6CD), txtDim = Color(0xFF8D9199),
-            pri = Color(0xFFA8C7FA), onPri = Color(0xFF062E6F), priDim = Color(0xFF7EAFD8),
-            sec = Color(0xFFC4C6CD), ter = Color(0xFFFDD663), onTer = Color(0xFF2E2500),
-            colors = Colors(
-                primary = Color(0xFFA8C7FA), primaryVariant = Color(0xFF7EAFD8),
-                onPrimary = Color(0xFF062E6F),
-                secondary = Color(0xFFC4C6CD), secondaryVariant = Color(0xFF9AA0A6),
-                onSecondary = Color(0xFF1B1C1E),
-                background = Color(0xFF0F0F10), onBackground = Color(0xFFE3E2E6),
-                surface = Color(0xFF0F0F10), onSurface = Color(0xFFE3E2E6),
-                onSurfaceVariant = Color(0xFFC4C6CD),
-                error = Color(0xFFF2B8B5), onError = Color(0xFF601410)
-            )
-        )
+/**
+ * API 25+ 回退配色（Wear OS 深色基调，来自 AppOpsPro defaultWearColorScheme）。
+ * Wear M3 的 ColorScheme 没有 surface/surfaceVariant 参数，
+ * 用 surfaceContainer / surfaceContainerLow / surfaceContainerHigh 替代。
+ * 也是 colorSchemeFromSeed 的中性底：只替换强调色族，表面色沿用中性灰。
+ */
+internal fun defaultWearColorScheme(): ColorScheme {
+    return ColorScheme(
+        primary = Color(0xFFA8C7FA),
+        onPrimary = Color(0xFF00315D),
+        primaryContainer = Color(0xFF004A77),
+        onPrimaryContainer = Color(0xFFD3E3FD),
+        secondary = Color(0xFFBFC6DC),
+        onSecondary = Color(0xFF293041),
+        secondaryContainer = Color(0xFF3F4759),
+        onSecondaryContainer = Color(0xFFDBE2F9),
+        tertiary = Color(0xFFDDBCE0),
+        onTertiary = Color(0xFF3F2844),
+        tertiaryContainer = Color(0xFF573E5C),
+        onTertiaryContainer = Color(0xFFFAD7FC),
+        error = Color(0xFFF2B8B5),
+        onError = Color(0xFF601410),
+        errorContainer = Color(0xFF8C1D18),
+        onErrorContainer = Color(0xFFF9DEDC),
+        background = Color(0xFF1B1B1F),
+        onBackground = Color(0xFFE3E2E6),
+        surfaceContainerLow = Color(0xFF1B1B1F),
+        surfaceContainer = Color(0xFF1B1B1F),
+        surfaceContainerHigh = Color(0xFF2B2B2F),
+        onSurface = Color(0xFFE3E2E6),
+        onSurfaceVariant = Color(0xFFC4C6D0),
+        outline = Color(0xFF8E9099),
+    )
+}
 
-    val hue = seedHue(s)
+private const val CHROMA_PRIMARY = 36f
+private const val CHROMA_SECONDARY = 16f
+private const val CHROMA_TERTIARY = 24f
+private const val CHROMA_NEUTRAL = 10f
+private const val CHROMA_NEUTRAL_VARIANT = 16f
+
+/** 由种子色生成完整 ColorScheme（深色，TonalSpot + 同色系中性表面）。 */
+fun colorSchemeFromSeed(seed: Color?): ColorScheme {
+    if (seed == null) return defaultWearColorScheme()
+    val hue = seedHue(seed)
     val hueT = (hue + 60f) % 360f
-    val cP = 36f; val cS = 16f; val cT = 24f; val cN = 10f; val cNv = 16f
+    return defaultWearColorScheme().copy(
+        // ── 强调色族（TonalSpot）──
+        primary = labColor(90f, CHROMA_PRIMARY, hue),
+        primaryDim = labColor(80f, CHROMA_PRIMARY, hue),
+        primaryContainer = labColor(30f, CHROMA_PRIMARY, hue),
+        onPrimary = labColor(10f, CHROMA_PRIMARY, hue),
+        onPrimaryContainer = labColor(95f, CHROMA_PRIMARY, hue),
 
-    val bg = labColor(10f, cN, hue)
-    val surf = labColor(16f, cN, hue)
-    val surfHigh = labColor(22f, cN, hue)
-    val txt = labColor(92f, cN, hue)
-    val txtMid = labColor(80f, cNv, hue)
-    val txtDim = labColor(62f, cN, hue)
-    val pri = labColor(90f, cP, hue)
-    val onPri = labColor(10f, cP, hue)
-    val priDim = labColor(80f, cP, hue)
-    val sec = labColor(90f, cS, hue)
-    val ter = labColor(90f, cT, hueT)
-    val onTer = labColor(10f, cT, hueT)
+        secondary = labColor(90f, CHROMA_SECONDARY, hue),
+        secondaryDim = labColor(80f, CHROMA_SECONDARY, hue),
+        secondaryContainer = labColor(30f, CHROMA_SECONDARY, hue),
+        onSecondary = labColor(10f, CHROMA_SECONDARY, hue),
+        onSecondaryContainer = labColor(95f, CHROMA_SECONDARY, hue),
 
-    return AppScheme(
-        bg = bg, surf = surf, surfHigh = surfHigh,
-        txt = txt, txtMid = txtMid, txtDim = txtDim,
-        pri = pri, onPri = onPri, priDim = priDim,
-        sec = sec, ter = ter, onTer = onTer,
-        colors = Colors(
-            primary = pri, primaryVariant = priDim, onPrimary = onPri,
-            secondary = sec, secondaryVariant = labColor(80f, cS, hue),
-            onSecondary = labColor(10f, cS, hue),
-            background = bg, onBackground = txt,
-            surface = bg, onSurface = txt,
-            onSurfaceVariant = txtMid,
-            error = Color(0xFFF2B8B5), onError = Color(0xFF601410)
-        )
+        tertiary = labColor(90f, CHROMA_TERTIARY, hueT),
+        tertiaryDim = labColor(80f, CHROMA_TERTIARY, hueT),
+        tertiaryContainer = labColor(30f, CHROMA_TERTIARY, hueT),
+        onTertiary = labColor(10f, CHROMA_TERTIARY, hueT),
+        onTertiaryContainer = labColor(95f, CHROMA_TERTIARY, hueT),
+
+        // ── 中性表面（带种子色相，低彩度）──
+        background = labColor(10f, CHROMA_NEUTRAL, hue),
+        onBackground = labColor(92f, CHROMA_NEUTRAL, hue),
+        surfaceContainerLow = labColor(10f, CHROMA_NEUTRAL, hue),
+        surfaceContainer = labColor(13f, CHROMA_NEUTRAL, hue),
+        surfaceContainerHigh = labColor(18f, CHROMA_NEUTRAL, hue),
+        onSurface = labColor(92f, CHROMA_NEUTRAL, hue),
+        onSurfaceVariant = labColor(80f, CHROMA_NEUTRAL_VARIANT, hue),
+        outline = labColor(60f, CHROMA_NEUTRAL_VARIANT, hue),
+        outlineVariant = labColor(30f, CHROMA_NEUTRAL_VARIANT, hue),
     )
 }
 
@@ -179,45 +192,4 @@ private fun fLab(t: Float): Float =
 private fun fLabInv(t: Float): Float {
     val t3 = t * t * t
     return if (t3 > 0.008856f) t3 else (t - 16f / 116f) / 7.787f
-}
-
-/* ============================================================
- * 堆叠卡片列表 —— 移植自 AppOpsPro 的 StackedShadow 思路
- * 卡片向上滚出（越过中线往屏顶）时阴影渐强，视觉上"浮"起来
- * 压住下方卡片；下方新滑出的卡片保持零阴影。
- * 适配 ScalingLazyColumn：从 layoutInfo 的可见项信息取位置。
- * ============================================================ */
-
-@Composable
-fun StackedCard(
-    listState: ScalingLazyListState,
-    index: Int,
-    onClick: (() -> Unit)? = null,
-    content: @Composable () -> Unit
-) {
-    val li = listState.layoutInfo
-    val info = li.visibleItemsInfo.firstOrNull { it.index == index }
-    val vh = (li.viewportEndOffset - li.viewportStartOffset).toFloat().takeIf { it > 0f } ?: 1f
-    // 顶部相对视口比例: 0=屏顶 1=屏底
-    val top = if (info != null) ((info.offset - li.viewportStartOffset).toFloat() / vh) else 1f
-    val rise = ((0.42f - top) / 0.42f).coerceIn(0f, 1f)
-    val strength = rise * rise * (3f - 2f * rise)  // smoothstep
-    val cardShape: Shape = RoundedCornerShape(18.dp)
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 3.dp)
-            .graphicsLayer {
-                shadowElevation = (strength * 18f).dp.toPx()
-                this.shape = cardShape
-                clip = false
-                ambientShadowColor = Color.Black
-                spotShadowColor = Color.Black
-            }
-            .clip(cardShape)
-            .background(SchemeState.surfHigh)
-            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-        contentAlignment = Alignment.CenterStart
-    ) { content() }
 }

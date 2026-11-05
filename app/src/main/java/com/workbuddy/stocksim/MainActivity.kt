@@ -46,24 +46,27 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.ButtonDefaults
-import androidx.wear.compose.material.Chip
-import androidx.wear.compose.material.ChipDefaults
-import androidx.wear.compose.material.CompactChip
-import androidx.wear.compose.material.ListHeader
-import androidx.wear.compose.material.MaterialTheme
-import androidx.wear.compose.material.Scaffold
-import androidx.wear.compose.material.ScalingLazyColumn
-import androidx.wear.compose.material.Switch
-import androidx.wear.compose.material.Text
-import androidx.wear.compose.material.TimeText
-import androidx.wear.compose.material.ToggleChip
-import androidx.wear.compose.material.Vignette
-import androidx.wear.compose.material.VignettePosition
-import androidx.wear.compose.material.rememberScalingLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Search
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
+import androidx.wear.compose.foundation.lazy.items
+import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
+import androidx.wear.compose.material3.CircularProgressIndicator
+import androidx.wear.compose.material3.Icon
+import androidx.wear.compose.material3.ListHeader
+import androidx.wear.compose.material3.LocalContentColor
+import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.SurfaceTransformation
+import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.lazy.TransformationSpec
+import androidx.wear.compose.material3.lazy.rememberTransformationSpec
+import androidx.wear.compose.material3.lazy.transformedHeight
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
@@ -92,16 +95,10 @@ val Down = Color(0xFF6DD58C)
 val Dark1 = Color(0xFF3B0905)
 val Dark2 = Color(0xFF03210F)
 
-// 其余颜色来自种子配色主题 (Theme.kt), 随主题切换即时生效
-val Gold: Color get() = SchemeState.ter
-val Dim: Color get() = SchemeState.txtDim
-val Pri: Color get() = SchemeState.pri
-val OnPri: Color get() = SchemeState.onPri
-val Surf: Color get() = SchemeState.surf
-val SurfHigh: Color get() = SchemeState.surfHigh
-val TxtMid: Color get() = SchemeState.txtMid
+@Composable
+fun upDownColor(v: Double): Color = if (v > 0) Up else if (v < 0) Down
+    else MaterialTheme.colorScheme.onSurfaceVariant
 
-fun upDownColor(v: Double): Color = if (v > 0) Up else if (v < 0) Down else Dim
 fun signed(v: Double, d: Int = 2): String =
     (if (v > 0) "+" else "") + String.format(Locale.CHINA, "%.${d}f", v)
 fun f2(v: Double, d: Int = 2): String = String.format(Locale.CHINA, "%.${d}f", v)
@@ -113,6 +110,7 @@ fun shortNum(v: Double): String =
 
 fun buzz(ctx: Context, ms: Long = 8) {
     try {
+        @Suppress("DEPRECATION")
         val v = ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         v.vibrate(VibrationEffect.createOneShot(ms, 60))
     } catch (_: Exception) {}
@@ -438,9 +436,10 @@ class Engine(private val ctx: Context) {
         val cur = Mk.currency(q.code)
         val p = acc.positions[q.code] ?: return "持仓数量不足"
         if (p.qty < qty) return "持仓数量不足"
+        val avgCost = p.avgCost
         val amt = q.price * qty; val fee = Mk.sellFee(q.code, amt)
         acc.cash[cur] = (acc.cash[cur] ?: 0.0) + amt - fee
-        acc.realizedPnl[cur] = (acc.realizedPnl[cur] ?: 0.0) + (q.price - p.avgCost) * qty - fee
+        acc.realizedPnl[cur] = (acc.realizedPnl[cur] ?: 0.0) + (q.price - avgCost) * qty - fee
         p.qty -= qty
         var remain = qty
         for (l in p.lots) {
@@ -453,7 +452,7 @@ class Engine(private val ctx: Context) {
         val t = Trade()
         t.time = now(); t.code = q.code; t.name = q.name; t.side = "sell"; t.cur = cur
         t.price = q.price; t.qty = qty; t.amount = amt; t.fee = fee
-        t.pnl = (q.price - p.avgCost) * qty - fee
+        t.pnl = (q.price - avgCost) * qty - fee
         acc.trades.add(0, t)
         save(); return null
     }
@@ -823,29 +822,24 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() { running = false; super.onDestroy() }
 }
 
-/* ================= UI (Wear OS 官方组件) ================= */
+/* ================= UI (Wear OS M3E 官方组件, AppOpsPro 同款堆叠列表) ================= */
 
 @Composable
 fun WearApp(store: Store) {
     val navController = rememberSwipeDismissableNavController()
 
-    MaterialTheme(colors = SchemeState.colors) {
+    AppTheme {
         Box(Modifier.fillMaxSize()) {
-            Scaffold(
-                timeText = { if (store.confirmPhase == 0) TimeText() },
-                vignette = { Vignette(vignettePosition = VignettePosition.TopAndBottom) }
-            ) {
-                SwipeDismissableNavHost(navController, startDestination = "watchlist") {
-                    composable("watchlist") { WatchlistScreen(store, navController) }
-                    composable("detail") { DetailScreen(store, navController) }
-                    composable("trade") { TradeScreen(store, navController) }
-                    composable("positions") { PositionsScreen(store, navController) }
-                    composable("orders") { OrdersScreen(store, navController) }
-                    composable("manage") { ManageScreen(store, navController) }
-                    composable("tutorial") { TutorialScreen(store, navController) }
-                    composable("chapter") { ChapterScreen(store) }
-                    composable("fx") { ExchangeScreen(store, navController) }
-                }
+            SwipeDismissableNavHost(navController, startDestination = "watchlist") {
+                composable("watchlist") { WatchlistScreen(store, navController) }
+                composable("detail") { DetailScreen(store, navController) }
+                composable("trade") { TradeScreen(store, navController) }
+                composable("positions") { PositionsScreen(store, navController) }
+                composable("orders") { OrdersScreen(store, navController) }
+                composable("manage") { ManageScreen(store, navController) }
+                composable("tutorial") { TutorialScreen(store, navController) }
+                composable("chapter") { ChapterScreen(store) }
+                composable("fx") { ExchangeScreen(store, navController) }
             }
             ConfirmOverlay(store)
             ToastBar(store)
@@ -854,180 +848,334 @@ fun WearApp(store: Store) {
     LaunchedEffect(Unit) { store.refreshQuotesAsync(); store.loadSparkAsync() }
 }
 
+/* ---- 市场徽标 (BarCapsule leading 插槽) ---- */
+@Composable
+fun MarketBadge(code: String) {
+    val (bg, fg) = when (Mk.market(code)) {
+        "HK" -> Color(0xFFFDD663) to Color(0xFF3A2E00)
+        "US" -> Color(0xFF7FACF6) to Color(0xFF06215C)
+        else -> Color(0xFFE8B4AD) to Color(0xFF42130C)
+    }
+    Box(
+        Modifier.size(22.dp).clip(CircleShape).background(bg),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            when (Mk.market(code)) { "HK" -> "港"; "US" -> "美"; else -> "A" },
+            fontSize = 10.sp, fontWeight = FontWeight.Bold, color = fg
+        )
+    }
+}
+
+/* ---- 大号动作胶囊 (买入/卖出/确认, 自绘跑道形与 BarCapsule 同一套视觉) ---- */
+@Composable
+fun ActionCapsule(
+    text: String,
+    container: Color,
+    content: Color,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        modifier
+            .fillMaxWidth()
+            .clip(BarCapsuleShape)
+            .background(if (enabled) container else cs.surfaceContainerHigh)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+            color = if (enabled) content else cs.onSurfaceVariant
+        )
+    }
+}
+
+/* ---- 迷你步进胶囊 ---- */
+@Composable
+fun MiniChip(text: String, color: Color? = null, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Text(
+        text,
+        fontSize = 12.sp, fontWeight = FontWeight.Medium,
+        color = color ?: cs.onSurface,
+        modifier = Modifier
+            .clip(BarCapsuleShape)
+            .background(cs.surfaceContainerHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 5.dp)
+    )
+}
+
+/** 迷你开关指示器 (m3 1.5 独立 Switch 为私有 API, 自绘同款视觉) */
+@Composable
+fun TinySwitch(checked: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .width(32.dp)
+            .height(18.dp)
+            .clip(BarCapsuleShape)
+            .background(if (checked) cs.primary else cs.surfaceContainer)
+            .padding(2.dp),
+        contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart
+    ) {
+        Box(
+            Modifier.size(14.dp).clip(CircleShape)
+                .background(if (checked) cs.onPrimary else cs.outline)
+        )
+    }
+}
+
 /* ---- 自选行情 ---- */
 @Composable
 fun WatchlistScreen(store: Store, nav: androidx.navigation.NavHostController) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val t = store.tick
     val ctx = LocalContext.current
-    ScalingLazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item { ListHeader { Text("自选行情", fontSize = 16.sp, fontWeight = FontWeight.Medium) } }
-        item {
-            Text(
-                (if (store.marketOpen) "A股交易中" else "A股未开盘") + " · 模拟第 ${store.playDays} 天",
-                fontSize = 10.sp, color = Dim
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                CompactChip(
-                    onClick = { buzz(ctx); nav.navigate("positions") },
-                    label = { Text("资产", fontSize = 11.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Pri)
-                )
-                CompactChip(
-                    onClick = { buzz(ctx); nav.navigate("orders") },
-                    label = { Text("委托", fontSize = 11.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Pri)
-                )
-                CompactChip(
-                    onClick = { buzz(ctx); nav.navigate("fx") },
-                    label = { Text("换汇", fontSize = 11.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Gold)
-                )
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                CompactChip(
-                    onClick = { buzz(ctx); nav.navigate("manage") },
-                    label = { Text("自选", fontSize = 11.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Pri)
-                )
-                CompactChip(
-                    onClick = { buzz(ctx); nav.navigate("tutorial") },
-                    label = { Text("教程", fontSize = 11.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Gold)
-                )
-            }
-        }
-        items(store.watch.size) { i ->
-            val code = store.watch[i]
-            val q = store.quotes[code]
-            StackedCard(listState, i, onClick = {
-                buzz(ctx); store.currentCode = code; store.loadSparkAsync()
-                nav.navigate("detail")
-            }) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(q?.name ?: code, fontSize = 14.sp, color = Color.White)
-                    Text(
-                        q?.let { signed(it.changePct) + "%" } ?: "—",
-                        fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                        color = upDownColor(q?.changePct ?: 0.0)
-                    )
+
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) {
+                    Text("自选行情 · 模拟第 ${store.playDays} 天", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Text(
-                    q?.let { Mk.sym(code) + f2(it.price) } ?: "—",
-                    fontSize = 11.sp, color = TxtMid
+            }
+            item(key = "entries_a") {
+                Row(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    EntryCapsule(Modifier.weight(1f), "资产持仓", cs) { buzz(ctx); nav.navigate("positions") }
+                    EntryCapsule(Modifier.weight(1f), "委托成交", cs) { buzz(ctx); nav.navigate("orders") }
+                }
+            }
+            item(key = "entries_b") {
+                Row(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    EntryCapsule(Modifier.weight(1f), "货币换汇", cs) { buzz(ctx); nav.navigate("fx") }
+                    EntryCapsule(Modifier.weight(1f), "炒股教程", cs, gold = true) { buzz(ctx); nav.navigate("tutorial") }
+                }
+            }
+            items(store.watch, key = { it }) { code ->
+                val q = store.quotes[code]
+                BarCapsule(
+                    containerColor = cs.surfaceContainerHigh,
+                    contentColor = cs.onSurface,
+                    secondaryContentColor = cs.onSurfaceVariant,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = {
+                        buzz(ctx); store.currentCode = code; store.loadSparkAsync()
+                        nav.navigate("detail")
+                    },
+                    leading = { MarketBadge(code) },
+                    label = {
+                        Text(q?.name ?: code, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    },
+                    secondaryLabel = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                q?.let { Mk.sym(code) + f2(it.price) } ?: "加载中…", fontSize = 11.sp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                q?.let { signed(it.changePct) + "%" } ?: "",
+                                fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                color = upDownColor(q?.changePct ?: 0.0)
+                            )
+                        }
+                    },
+                    trailing = {
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 )
             }
-        }
-        item {
-            Text("A股 · 港股 · 美股 · ETF\n在「自选」页搜索添加", fontSize = 10.sp, color = Dim,
-                textAlign = TextAlign.Center)
+            item(key = "manage_entry") {
+                BarCapsule(
+                    containerColor = cs.surfaceContainerHigh,
+                    contentColor = cs.onSurface,
+                    secondaryContentColor = cs.onSurfaceVariant,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = { buzz(ctx); nav.navigate("manage") },
+                    leading = {
+                        Icon(Icons.Filled.Search, contentDescription = null,
+                            tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                    },
+                    label = { Text("搜索 / 管理自选", fontSize = 13.sp) },
+                    secondaryLabel = { Text("A股 · 港股 · 美股 · ETF", fontSize = 10.sp) }
+                )
+            }
         }
     }
 }
 
-/* ---- 个股详情 (ScalingLazyColumn 适配圆形屏幕, 内容多时自动弧形滚动不溢出) ---- */
+/** 自选页入口胶囊 (与 BarCapsule 同视觉, 半宽) */
+@Composable
+private fun EntryCapsule(
+    modifier: Modifier,
+    text: String,
+    cs: androidx.wear.compose.material3.ColorScheme,
+    gold: Boolean = false,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier
+            .height(BarCapsuleHeight)
+            .clip(BarCapsuleShape)
+            .background(cs.surfaceContainerHigh)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            color = if (gold) cs.tertiary else cs.onSurface
+        )
+    }
+}
+
+/* ---- 个股详情 (TransformingLazyColumn 圆屏自动堆叠滚动, 不溢出) ---- */
 @Composable
 fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val t = store.tick
     val code = store.currentCode
     val q = store.quotes[code]
     val ctx = LocalContext.current
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    Mk.marketName(code) + if (Mk.isFund(code)) "·基金" else "",
-                    fontSize = 9.sp, color = OnPri,
-                    modifier = Modifier.background(Pri, RoundedCornerShape(100))
-                        .padding(horizontal = 6.dp, vertical = 1.dp)
-                )
-                Text(q?.name ?: code, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = Color.White)
+
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                Row(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    MarketBadge(code)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        q?.name ?: code, fontSize = 17.sp, fontWeight = FontWeight.Medium,
+                        color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                    if (Mk.isFund(code)) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("基金", fontSize = 9.sp, color = cs.onPrimary,
+                            modifier = Modifier.background(cs.primary, BarCapsuleShape)
+                                .padding(horizontal = 6.dp, vertical = 1.dp))
+                    }
+                }
             }
-        }
-        item {
-            Text(
-                if (q != null) Mk.sym(code) + f2(q.price) else "—",
-                fontSize = 34.sp, fontWeight = FontWeight.Medium,
-                color = upDownColor(q?.changePct ?: 0.0)
-            )
-        }
-        item {
-            Text(
-                if (q != null) "${signed(q.change)}  ${signed(q.changePct)}%" else "",
-                fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                color = upDownColor(q?.changePct ?: 0.0)
-            )
-        }
-        item {
-            Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
-                Modifier.fillMaxWidth().height(54.dp))
-        }
-        item {
-            val capUnit = if (Mk.market(code) == "CN") "亿¥" else if (Mk.market(code) == "HK") "亿HK$" else "亿$"
-            val rows = mutableListOf(
-                "今开" to (q?.let { f2(it.open) } ?: "—"), "昨收" to (q?.let { f2(it.prevClose) } ?: "—"),
-                "最高" to (q?.let { f2(it.high) } ?: "—"), "最低" to (q?.let { f2(it.low) } ?: "—"),
-                "换手" to (q?.let { f2(it.turnover) + "%" } ?: "—"),
-                "市值" to (q?.let { f2(it.marketCap, 0) + capUnit } ?: "—"))
-            if (Mk.market(code) == "HK") rows.add("每手" to (q?.let { "${it.lot}股" } ?: "—"))
-            if (Mk.market(code) == "CN") {
-                rows.add("涨停" to (q?.let { f2(it.limitUp) } ?: "—"))
-                rows.add("跌停" to (q?.let { f2(it.limitDown) } ?: "—"))
+            item {
+                Column(Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        if (q != null) Mk.sym(code) + f2(q.price) else "—",
+                        fontSize = 34.sp, fontWeight = FontWeight.Medium,
+                        color = upDownColor(q?.changePct ?: 0.0)
+                    )
+                    Text(
+                        if (q != null) "${signed(q.change)}  ${signed(q.changePct)}%" else "",
+                        fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                        color = upDownColor(q?.changePct ?: 0.0)
+                    )
+                }
             }
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                for (chunk in rows.chunked(2)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        for ((k, v) in chunk) {
-                            Row(Modifier.width(116.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(k, fontSize = 11.sp, color = Dim)
-                                Text(v, fontSize = 11.sp, color = TxtMid)
+            item {
+                Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
+                    Modifier.fillMaxWidth().height(54.dp).transformedHeight(this, spec))
+            }
+            item {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        val capUnit = if (Mk.market(code) == "CN") "亿¥"
+                            else if (Mk.market(code) == "HK") "亿HK$" else "亿$"
+                        val rows = mutableListOf(
+                            "今开" to (q?.let { f2(it.open) } ?: "—"),
+                            "昨收" to (q?.let { f2(it.prevClose) } ?: "—"),
+                            "最高" to (q?.let { f2(it.high) } ?: "—"),
+                            "最低" to (q?.let { f2(it.low) } ?: "—"),
+                            "换手" to (q?.let { f2(it.turnover) + "%" } ?: "—"),
+                            "市值" to (q?.let { f2(it.marketCap, 0) + capUnit } ?: "—"))
+                        if (Mk.market(code) == "HK") rows.add("每手" to (q?.let { "${it.lot}股" } ?: "—"))
+                        if (Mk.market(code) == "CN") {
+                            rows.add("涨停" to (q?.let { f2(it.limitUp) } ?: "—"))
+                            rows.add("跌停" to (q?.let { f2(it.limitDown) } ?: "—"))
+                        }
+                        for (chunk in rows.chunked(2)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                for ((k, v) in chunk) {
+                                    Row(Modifier.width(118.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(k, fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                        Text(v, fontSize = 11.sp, color = cs.onSurface)
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(
-                    onClick = {
-                        buzz(ctx)
-                        store.side = "buy"
-                        store.trPrice = q?.price ?: 0.0
-                        store.trQty = Mk.lot(code, q)
-                        nav.navigate("trade")
-                    },
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Up, contentColor = Dark1)
-                ) { Text("买入", fontSize = 13.sp, fontWeight = FontWeight.Medium) }
-                Button(
-                    onClick = {
-                        buzz(ctx)
-                        store.side = "sell"
-                        store.trPrice = q?.price ?: 0.0
-                        val p = store.engine.acc.positions[code]
-                        val avail = p?.let { store.engine.available(it) } ?: 0
-                        store.trQty = if (avail >= Mk.lot(code, q)) Mk.lot(code, q) else 0
-                        if (avail <= 0) store.toast(if (Mk.isT1(code)) "今日无可用数量(T+1)" else "暂无持仓")
-                        nav.navigate("trade")
-                    },
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Down, contentColor = Dark2)
-                ) { Text("卖出", fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+            item {
+                Row(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        ActionCapsule("买入", Up, Dark1) {
+                            buzz(ctx)
+                            store.side = "buy"
+                            store.trPrice = q?.price ?: 0.0
+                            store.trQty = Mk.lot(code, q)
+                            nav.navigate("trade")
+                        }
+                    }
+                    Box(Modifier.weight(1f)) {
+                        ActionCapsule("卖出", Down, Dark2) {
+                            buzz(ctx)
+                            store.side = "sell"
+                            store.trPrice = q?.price ?: 0.0
+                            val p = store.engine.acc.positions[code]
+                            val avail = p?.let { store.engine.available(it) } ?: 0
+                            store.trQty = if (avail >= Mk.lot(code, q)) Mk.lot(code, q) else 0
+                            if (avail <= 0) store.toast(if (Mk.isT1(code)) "今日无可用数量(T+1)" else "暂无持仓")
+                            nav.navigate("trade")
+                        }
+                    }
+                }
+            }
+            item {
+                Text(
+                    Mk.ruleText(code, q),
+                    fontSize = 10.sp, color = cs.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }
@@ -1057,6 +1205,9 @@ fun Sparkline(data: List<Float>?, up: Boolean, modifier: Modifier) {
 /* ---- 交易 ---- */
 @Composable
 fun TradeScreen(store: Store, nav: androidx.navigation.NavHostController) {
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val t = store.tick
     val code = store.currentCode
     val q = store.quotes[code]
@@ -1071,127 +1222,129 @@ fun TradeScreen(store: Store, nav: androidx.navigation.NavHostController) {
     // 当前市场可用资金
     val cashAvail = store.engine.acc.availableCash(Mk.currency(code))
 
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    (if (buy) "买入" else "卖出") + " · " + (q?.name ?: code),
-                    fontSize = 15.sp, fontWeight = FontWeight.Medium,
-                    color = if (buy) Up else Down
-                )
-                Text(
-                    Mk.marketName(code) + if (Mk.isFund(code)) "·基金" else "" +
-                        (if (store.marketOpen) "" else " · 按最新价模拟"),
-                    fontSize = 10.sp, color = Dim
-                )
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CompactChip(
-                    onClick = { store.side = "buy"; store.trPrice = q?.price ?: store.trPrice },
-                    label = { Text("买入", fontSize = 11.sp) },
-                    colors = if (buy) ChipDefaults.secondaryChipColors(
-                        backgroundColor = Up, contentColor = Dark1)
-                    else ChipDefaults.secondaryChipColors()
-                )
-                CompactChip(
-                    onClick = { store.side = "sell"; store.trPrice = q?.price ?: store.trPrice },
-                    label = { Text("卖出", fontSize = 11.sp) },
-                    colors = if (!buy) ChipDefaults.secondaryChipColors(
-                        backgroundColor = Down, contentColor = Dark2)
-                    else ChipDefaults.secondaryChipColors()
-                )
-            }
-        }
-        item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("价格 ($curName)", fontSize = 10.sp, color = Dim)
-                Text(f2(store.trPrice), fontSize = 28.sp, fontWeight = FontWeight.Medium, color = Color.White)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CompactChip(onClick = { store.trPrice = max(0.01, round2(store.trPrice - 0.01)) },
-                        label = { Text("−0.01", fontSize = 11.sp) })
-                    CompactChip(onClick = { store.trPrice = max(0.01, round2(store.trPrice + 0.01)) },
-                        label = { Text("+0.01", fontSize = 11.sp) })
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                Column(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        (if (buy) "买入" else "卖出") + " · " + (q?.name ?: code),
+                        fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                        color = if (buy) Up else Down
+                    )
+                    Text(
+                        Mk.marketName(code) + (if (Mk.isFund(code)) "·基金" else "") +
+                            (if (store.marketOpen) "" else " · 按最新价模拟"),
+                        fontSize = 10.sp, color = cs.onSurfaceVariant
+                    )
                 }
             }
-        }
-        item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("数量" + (if (lot > 1) " (每手$lot)" else " (股)"), fontSize = 10.sp, color = Dim)
-                Text("${store.trQty}", fontSize = 26.sp, fontWeight = FontWeight.Medium, color = Color.White)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CompactChip(onClick = { store.trQty = max(0, store.trQty - lot) },
-                        label = { Text("−$lot", fontSize = 11.sp) })
-                    CompactChip(onClick = {
-                        if (!buy) {
-                            val p = store.engine.acc.positions[code]
-                            val avail = p?.let { store.engine.available(it) } ?: 0
-                            if (store.trQty + lot > avail) {
-                                store.toast(if (Mk.isT1(code)) "可卖 $avail (T+1)" else "可卖 $avail")
-                                return@CompactChip
+            item {
+                Row(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        ActionCapsule("买入", Up, Dark1, enabled = buy) {
+                            store.side = "buy"; store.trPrice = q?.price ?: store.trPrice
+                        }
+                    }
+                    Box(Modifier.weight(1f)) {
+                        ActionCapsule("卖出", Down, Dark2, enabled = !buy) {
+                            store.side = "sell"; store.trPrice = q?.price ?: store.trPrice
+                        }
+                    }
+                }
+            }
+            item {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("价格 ($curName)", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                        Text(f2(store.trPrice), fontSize = 26.sp, fontWeight = FontWeight.Medium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            MiniChip("−0.01") { store.trPrice = max(0.01, round2(store.trPrice - 0.01)) }
+                            MiniChip("+0.01") { store.trPrice = max(0.01, round2(store.trPrice + 0.01)) }
+                        }
+                    }
+                }
+            }
+            item {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("数量" + (if (lot > 1) " (每手$lot)" else " (股)"),
+                            fontSize = 10.sp, color = cs.onSurfaceVariant)
+                        Text("${store.trQty}", fontSize = 24.sp, fontWeight = FontWeight.Medium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            MiniChip("−$lot") { store.trQty = max(0, store.trQty - lot) }
+                            MiniChip("+$lot") {
+                                if (!buy) {
+                                    val p = store.engine.acc.positions[code]
+                                    val avail = p?.let { store.engine.available(it) } ?: 0
+                                    if (store.trQty + lot > avail) {
+                                        store.toast(if (Mk.isT1(code)) "可卖 $avail (T+1)" else "可卖 $avail")
+                                        return@MiniChip
+                                    }
+                                }
+                                store.trQty += lot
                             }
                         }
-                        store.trQty += lot
-                    }, label = { Text("+$lot", fontSize = 11.sp) })
-                }
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("25%" to 0.25, "50%" to 0.5, "全部" to 1.0).forEach { (label, r) ->
-                        CompactChip(onClick = {
-                            if (buy) {
-                                if (store.trPrice > 0) {
-                                    // 预留约0.2%费用, 向下取整到手
-                                    val raw = cashAvail * r / (store.trPrice * 1.002)
-                                    store.trQty = if (lot > 1) (raw.toInt() / lot) * lot else raw.toInt()
-                                }
-                            } else {
-                                val p = store.engine.acc.positions[code]
-                                if (p == null) store.toast("当前无持仓")
-                                else {
-                                    val avail = store.engine.available(p)
-                                    store.trQty = if (lot > 1) (avail * r).toInt() / lot * lot
-                                        else (avail * r).toInt()
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            listOf("25%" to 0.25, "50%" to 0.5, "全部" to 1.0).forEach { (label, r) ->
+                                MiniChip(label) {
+                                    if (buy) {
+                                        if (store.trPrice > 0) {
+                                            // 预留约0.2%费用, 向下取整到手
+                                            val raw = cashAvail * r / (store.trPrice * 1.002)
+                                            store.trQty = if (lot > 1) (raw.toInt() / lot) * lot else raw.toInt()
+                                        }
+                                    } else {
+                                        val p = store.engine.acc.positions[code]
+                                        if (p == null) store.toast("当前无持仓")
+                                        else {
+                                            val avail = store.engine.available(p)
+                                            store.trQty = if (lot > 1) (avail * r).toInt() / lot * lot
+                                                else (avail * r).toInt()
+                                        }
+                                    }
                                 }
                             }
-                        }, label = { Text(label, fontSize = 11.sp) })
+                        }
                     }
                 }
             }
-        }
-        item {
-            Text(
-                Mk.sym(code) + f2(amt) + " · 费用 " + Mk.sym(code) + f2(fee) +
-                    " · 可用 " + Mk.sym(code) + shortNum(cashAvail),
-                fontSize = 11.sp, color = Dim
-            )
-        }
-        item {
-            Button(
-                onClick = {
-                    if (store.trQty <= 0) { store.toast("数量无效"); return@Button }
-                    if (lot > 1 && store.trQty % lot != 0) { store.toast("数量须为$lot 整数倍"); return@Button }
-                    if (store.trPrice <= 0) { store.toast("价格无效"); return@Button }
-                    buzz(ctx, 15)
-                    submitTrade(store) {
-                        nav.navigate("orders") { popUpTo("watchlist") }
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    backgroundColor = if (buy) Up else Down,
-                    contentColor = if (buy) Dark1 else Dark2
-                )
-            ) {
+            item {
                 Text(
-                    "确认" + if (buy) "买入" else "卖出",
-                    fontSize = 14.sp, fontWeight = FontWeight.Medium
+                    Mk.sym(code) + f2(amt) + " · 费用 " + Mk.sym(code) + f2(fee) +
+                        " · 可用 " + Mk.sym(code) + shortNum(cashAvail),
+                    fontSize = 11.sp, color = cs.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    textAlign = TextAlign.Center
                 )
             }
-            Text(Mk.ruleText(code, q), fontSize = 9.sp, color = Dim)
-            Spacer(Modifier.height(30.dp))
+            item {
+                Column(Modifier.fillMaxWidth().transformedHeight(this, spec)) {
+                    ActionCapsule("确认" + if (buy) "买入" else "卖出",
+                        if (buy) Up else Down, if (buy) Dark1 else Dark2) {
+                        if (store.trQty <= 0) { store.toast("数量无效"); return@ActionCapsule }
+                        if (lot > 1 && store.trQty % lot != 0) { store.toast("数量须为$lot 整数倍"); return@ActionCapsule }
+                        if (store.trPrice <= 0) { store.toast("价格无效"); return@ActionCapsule }
+                        buzz(ctx, 15)
+                        submitTrade(store) {
+                            nav.navigate("orders") { popUpTo("watchlist") }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1235,7 +1388,9 @@ fun submitTrade(store: Store, onFinished: () -> Unit) {
 /* ---- 资产持仓 ---- */
 @Composable
 fun PositionsScreen(store: Store, nav: androidx.navigation.NavHostController) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val t = store.tick
     val ctx = LocalContext.current
     val acc = store.engine.acc
@@ -1245,74 +1400,96 @@ fun PositionsScreen(store: Store, nav: androidx.navigation.NavHostController) {
         val sym = when (c) { "HKD" -> "HK$"; "USD" -> "$"; else -> "¥" }
         sym + shortNum(acc.availableCash(c))
     }.joinToString(" · ")
-    ScalingLazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item { ListHeader { Text("资产持仓", fontSize = 16.sp, fontWeight = FontWeight.Medium) } }
-        item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("总资产 ¥${f2(total, 0)}", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Color.White)
-                Text(
-                    "总盈亏 ${signed(total - baseline, 0)}",
-                    fontSize = 12.sp, color = upDownColor(total - baseline)
-                )
-                Text("可用 $cashLine", fontSize = 10.sp, color = Dim,
-                    textAlign = TextAlign.Center)
-                Text("实时汇率 1USD=¥${f2(Fx.rate("USD"), 3)} · 1HKD=¥${f2(Fx.rate("HKD"), 4)}",
-                    fontSize = 9.sp, color = Dim)
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CompactChip(
-                    onClick = { buzz(ctx); nav.navigate("fx") },
-                    label = { Text("换汇", fontSize = 11.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Gold)
-                )
-                CompactChip(
-                    onClick = { resetFlow(store) },
-                    label = { Text("重置账户", fontSize = 11.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Up)
-                )
-            }
-        }
-        val pos = acc.positions.values.toList()
-        if (pos.isEmpty()) {
+
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
             item {
-                Text("暂无持仓\n去买入第一只股票吧", fontSize = 12.sp, color = Dim,
-                    textAlign = TextAlign.Center)
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) { Text("资产持仓") }
             }
-        }
-        items(pos.size) { i ->
-            val p = pos[i]
-            val price = store.quotes[p.code]?.price ?: 0.0
-            val pnl = (price - p.avgCost) * p.qty
-            val pnlPct = if (p.avgCost > 0) (price / p.avgCost - 1) * 100 else 0.0
-            val lot = Mk.lot(p.code, store.quotes[p.code])
-            StackedCard(listState, i, onClick = {
-                buzz(ctx)
-                store.currentCode = p.code
-                store.side = "sell"
-                store.trPrice = store.quotes[p.code]?.price ?: 0.0
-                val avail = store.engine.available(p)
-                store.trQty = if (avail >= lot) lot else 0
-                if (avail <= 0) store.toast(if (Mk.isT1(p.code)) "今日无可用卖出(T+1)" else "无可卖数量")
-                nav.navigate("trade")
-            }) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(p.name, fontSize = 14.sp, color = Color.White)
-                    Text("${signed(pnl, 0)} ${signed(pnlPct)}%",
-                        fontSize = 12.sp, fontWeight = FontWeight.Medium, color = upDownColor(pnl))
+            item {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(
+                        Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("总资产 ¥${f2(total, 0)}", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            "总盈亏 ${signed(total - baseline, 0)}",
+                            fontSize = 12.sp, color = upDownColor(total - baseline)
+                        )
+                        Text("可用 $cashLine", fontSize = 10.sp, color = cs.onSurfaceVariant,
+                            textAlign = TextAlign.Center)
+                        Text("实时汇率 1USD=¥${f2(Fx.rate("USD"), 3)} · 1HKD=¥${f2(Fx.rate("HKD"), 4)}",
+                            fontSize = 9.sp, color = cs.onSurfaceVariant)
+                    }
                 }
-                Text("${p.qty}股 · 可卖${store.engine.available(p)} · 成本${Mk.sym(p.code)}${f2(p.avgCost)}",
-                    fontSize = 10.sp, color = TxtMid)
+            }
+            item(key = "entries") {
+                Column(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Box(Modifier.weight(1f)) {
+                            ActionCapsule("换汇", cs.primary, cs.onPrimary) { buzz(ctx); nav.navigate("fx") }
+                        }
+                        Box(Modifier.weight(1f)) {
+                            ActionCapsule("重置账户", cs.surfaceContainerHigh, Up) { resetFlow(store) }
+                        }
+                    }
+                }
+            }
+            val pos = acc.positions.values.toList()
+            if (pos.isEmpty()) {
+                item {
+                    Text("暂无持仓\n去买入第一只股票吧", fontSize = 12.sp, color = cs.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().transformedHeight(this, spec))
+                }
+            }
+            items(pos.size) { i ->
+                val p = pos[i]
+                val price = store.quotes[p.code]?.price ?: 0.0
+                val pnl = (price - p.avgCost) * p.qty
+                val pnlPct = if (p.avgCost > 0) (price / p.avgCost - 1) * 100 else 0.0
+                val lot = Mk.lot(p.code, store.quotes[p.code])
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = {
+                        buzz(ctx)
+                        store.currentCode = p.code
+                        store.side = "sell"
+                        store.trPrice = store.quotes[p.code]?.price ?: 0.0
+                        val avail = store.engine.available(p)
+                        store.trQty = if (avail >= lot) lot else 0
+                        if (avail <= 0) store.toast(if (Mk.isT1(p.code)) "今日无可用卖出(T+1)" else "无可卖数量")
+                        nav.navigate("trade")
+                    }) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                MarketBadge(p.code)
+                                Spacer(Modifier.width(6.dp))
+                                Text(p.name, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Text("${signed(pnl, 0)} ${signed(pnlPct)}%",
+                                fontSize = 12.sp, fontWeight = FontWeight.Medium, color = upDownColor(pnl))
+                        }
+                        Text("${p.qty}股 · 可卖${store.engine.available(p)} · 成本${Mk.sym(p.code)}${f2(p.avgCost)}",
+                            fontSize = 10.sp, color = cs.onSurfaceVariant)
+                    }
+                }
             }
         }
-        item { Spacer(Modifier.height(20.dp)) }
     }
 }
 
@@ -1332,105 +1509,138 @@ fun resetFlow(store: Store) {
 /* ---- 委托/成交 ---- */
 @Composable
 fun OrdersScreen(store: Store, nav: androidx.navigation.NavHostController) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val t = store.tick
     val ctx = LocalContext.current
     val acc = store.engine.acc
-    ScalingLazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item { ListHeader { Text("委托 · 成交", fontSize = 16.sp, fontWeight = FontWeight.Medium) } }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CompactChip(
-                    onClick = { store.otMode = "o" },
-                    label = { Text("委托", fontSize = 11.sp) },
-                    colors = if (store.otMode == "o") ChipDefaults.secondaryChipColors(
-                        backgroundColor = Pri, contentColor = OnPri)
-                    else ChipDefaults.secondaryChipColors()
-                )
-                CompactChip(
-                    onClick = { store.otMode = "t" },
-                    label = { Text("成交", fontSize = 11.sp) },
-                    colors = if (store.otMode == "t") ChipDefaults.secondaryChipColors(
-                        backgroundColor = Pri, contentColor = OnPri)
-                    else ChipDefaults.secondaryChipColors()
-                )
+
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) { Text("委托 · 成交") }
             }
-        }
-        if (store.otMode == "o") {
-            val os = acc.orders
-            if (os.isEmpty()) {
-                item { Text("暂无委托", fontSize = 12.sp, color = Dim) }
-            }
-            items(os.size) { i ->
-                val o = os[i]
-                val st = when (o.status) {
-                    "pending" -> "待成交·点按撤单" to Gold
-                    "filled" -> "已成交 @${o.filledPrice}" to Down
-                    else -> "已撤单" to Dim
-                }
-                StackedCard(listState, i,
-                    onClick = if (o.status == "pending") { {
-                        buzz(ctx)
-                        store.setConfirm(1, "撤销委托", "")
-                        Thread {
-                            Thread.sleep(500)
-                            val ok = store.engine.cancelOrder(o.id)
-                            store.ui.post {
-                                store.setConfirm(if (ok) 2 else 3, if (ok) "已撤单" else "撤单失败", "")
-                                store.tick++
-                                store.hideConfirmLater()
-                            }
-                        }.start()
-                    } } else null
+            item(key = "mode") {
+                Row(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(
-                            o.name + " " + if (o.side == "buy") "买" else "卖",
-                            fontSize = 14.sp, color = Color.White
-                        )
-                        Text("${o.qty}股 @${Mk.sym(o.code)}${f2(o.price)}",
-                            fontSize = 12.sp, color = TxtMid)
+                    Box(Modifier.weight(1f)) {
+                        ActionCapsule("委托", cs.primary, cs.onPrimary, enabled = store.otMode == "o") {
+                            store.otMode = "o"
+                        }
                     }
-                    Text(st.first, fontSize = 11.sp, color = st.second)
+                    Box(Modifier.weight(1f)) {
+                        ActionCapsule("成交", cs.primary, cs.onPrimary, enabled = store.otMode == "t") {
+                            store.otMode = "t"
+                        }
+                    }
                 }
             }
-        } else {
-            val ts = acc.trades
-            if (ts.isEmpty()) {
-                item { Text("暂无成交记录", fontSize = 12.sp, color = Dim) }
-            }
-            items(ts.size) { i ->
-                val tr = ts[i]
-                StackedCard(listState, i) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(
-                            tr.name + " " + if (tr.side == "buy") "买入" else "卖出",
-                            fontSize = 14.sp, color = Color.White
-                        )
-                        Text(
-                            if (!tr.pnl.isNaN()) signed(tr.pnl, 0)
-                            else Mk.sym(tr.code) + f2(tr.amount, 0),
-                            fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                            color = if (!tr.pnl.isNaN()) upDownColor(tr.pnl) else TxtMid
-                        )
+            if (store.otMode == "o") {
+                val os = acc.orders
+                if (os.isEmpty()) {
+                    item {
+                        Text("暂无委托", fontSize = 12.sp, color = cs.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                            textAlign = TextAlign.Center)
                     }
-                    Text("${tr.qty}股 @${Mk.sym(tr.code)}${f2(tr.price)} · ${tr.time.take(16).substringAfter(' ')}",
-                        fontSize = 10.sp, color = TxtMid)
+                }
+                items(os.size) { i ->
+                    val o = os[i]
+                    val st = when (o.status) {
+                        "pending" -> "待成交 · 点按撤单" to cs.tertiary
+                        "filled" -> "已成交 @${o.filledPrice}" to Down
+                        else -> "已撤单" to cs.onSurfaceVariant
+                    }
+                    StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                        modifier = Modifier.transformedHeight(this, spec),
+                        onClick = if (o.status == "pending") { {
+                            buzz(ctx)
+                            store.setConfirm(1, "撤销委托", "")
+                            Thread {
+                                Thread.sleep(500)
+                                val ok = store.engine.cancelOrder(o.id)
+                                store.ui.post {
+                                    store.setConfirm(if (ok) 2 else 3, if (ok) "已撤单" else "撤单失败", "")
+                                    store.tick++
+                                    store.hideConfirmLater()
+                                }
+                            }.start()
+                        } } else null
+                    ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    MarketBadge(o.code)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        o.name + " " + if (o.side == "buy") "买" else "卖",
+                                        fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text("${o.qty}股 @${Mk.sym(o.code)}${f2(o.price)}",
+                                    fontSize = 11.sp, color = cs.onSurfaceVariant)
+                            }
+                            Text(st.first, fontSize = 11.sp, color = st.second)
+                        }
+                    }
+                }
+            } else {
+                val ts = acc.trades
+                if (ts.isEmpty()) {
+                    item {
+                        Text("暂无成交记录", fontSize = 12.sp, color = cs.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                            textAlign = TextAlign.Center)
+                    }
+                }
+                items(ts.size) { i ->
+                    val tr = ts[i]
+                    StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                        modifier = Modifier.transformedHeight(this, spec)) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    MarketBadge(tr.code)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        tr.name + " " + if (tr.side == "buy") "买入" else "卖出",
+                                        fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text(
+                                    if (!tr.pnl.isNaN()) signed(tr.pnl, 0)
+                                    else Mk.sym(tr.code) + f2(tr.amount, 0),
+                                    fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                    color = if (!tr.pnl.isNaN()) upDownColor(tr.pnl) else cs.onSurfaceVariant
+                                )
+                            }
+                            Text("${tr.qty}股 @${Mk.sym(tr.code)}${f2(tr.price)} · ${tr.time.take(16).substringAfter(' ')}",
+                                fontSize = 10.sp, color = cs.onSurfaceVariant)
+                        }
+                    }
                 }
             }
         }
-        item { Spacer(Modifier.height(20.dp)) }
     }
 }
 
 /* ---- 自选管理 ---- */
 @Composable
 fun ManageScreen(store: Store, nav: androidx.navigation.NavHostController) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val t = store.tick
     val activity = LocalContext.current as? Activity
     val ctx = LocalContext.current
@@ -1440,66 +1650,90 @@ fun ManageScreen(store: Store, nav: androidx.navigation.NavHostController) {
         "sh510300" to "沪深300ETF", "sh513100" to "纳指ETF", "sz159915" to "创业板ETF",
         "hk00700" to "腾讯控股", "hk09988" to "阿里巴巴", "usAAPL" to "苹果",
         "usTSLA" to "特斯拉", "usNVDA" to "英伟达")
-    ScalingLazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item { ListHeader { Text("自选管理", fontSize = 16.sp, fontWeight = FontWeight.Medium) } }
-        item {
-            CompactChip(
-                onClick = { showSearchDialog(store, activity) },
-                label = { Text("🔍 搜索全市场 (A股/港/美/ETF)", fontSize = 10.sp) },
-                colors = ChipDefaults.secondaryChipColors(
-                    backgroundColor = Pri, contentColor = OnPri)
-            )
-        }
-        item {
-            Text("搜索支持: 中文名 / 代码 / 拼音\n如 腾讯 / 00700 / AAPL / 纳指",
-                fontSize = 9.sp, color = Dim, textAlign = TextAlign.Center)
-        }
-        // 主题种子色选择器 (来自 AppOpsPro 的种子配色)
-        item { ListHeader { Text("主题种子色", fontSize = 12.sp, color = TxtMid) } }
-        val themeSeeds = ThemeSeed.colorSeeds.chunked(5)
-        items(themeSeeds.size) { ri ->
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                for (s in themeSeeds[ri]) {
-                    val selected = ThemeCurrent == s
-                    Box(
-                        Modifier
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .background(s.seed ?: Color(0xFF8D9199))
-                            .border(
-                                width = if (selected) 2.5.dp else 1.dp,
-                                color = if (selected) Color.White else Dim,
-                                shape = CircleShape
-                            )
-                            .clickable { buzz(ctx); store.setTheme(s) }
-                    )
-                }
+
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) { Text("自选管理") }
             }
-        }
-        item { ListHeader { Text("热门标的", fontSize = 12.sp, color = TxtMid) } }
-        items(popular.size) { i ->
-            val (code, name) = popular[i]
-            val added = store.watch.contains(code)
-            StackedCard(listState, i, onClick = {
-                buzz(ctx)
-                if (added) { store.removeWatch(code); store.toast("已移除 $name") }
-                else { store.addWatch(code); store.toast("已添加 $name") }
-            }) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Column {
-                        Text(name, fontSize = 14.sp, color = Color.White)
-                        Text(Mk.marketName(code) + " · " + code, fontSize = 10.sp, color = Dim)
+            item(key = "search") {
+                BarCapsule(
+                    containerColor = cs.primary,
+                    contentColor = cs.onPrimary,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = { showSearchDialog(store, activity) },
+                    leading = {
+                        Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                    },
+                    label = { Text("搜索全市场添加自选", fontSize = 13.sp) },
+                    secondaryLabel = { Text("名称 / 代码 / 拼音", fontSize = 10.sp) }
+                )
+            }
+            item(key = "theme") {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("主题种子色 (来自 AppOpsPro)", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                        Spacer(Modifier.height(6.dp))
+                        val rows = ThemeSeed.colorSeeds.chunked(5)
+                        for (r in rows) {
+                            Spacer(Modifier.height(5.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                for (s in r) {
+                                    val selected = ThemeCurrent == s
+                                    Box(
+                                        Modifier
+                                            .size(22.dp)
+                                            .clip(CircleShape)
+                                            .background(s.seed ?: cs.primary)
+                                            .border(
+                                                width = if (selected) 2.5.dp else 1.dp,
+                                                color = if (selected) cs.onSurface else cs.outline,
+                                                shape = CircleShape
+                                            )
+                                            .clickable { buzz(ctx); store.setTheme(s) }
+                                    )
+                                }
+                            }
+                        }
                     }
-                    Switch(checked = added, onCheckedChange = null)
                 }
             }
+            item(key = "hot_header") {
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) { Text("热门标的", fontSize = 12.sp) }
+            }
+            items(popular, key = { it.first }) { (code, name) ->
+                val added = store.watch.contains(code)
+                BarCapsule(
+                    containerColor = cs.surfaceContainerHigh,
+                    contentColor = cs.onSurface,
+                    secondaryContentColor = cs.onSurfaceVariant,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = {
+                        buzz(ctx)
+                        if (added) { store.removeWatch(code); store.toast("已移除 $name") }
+                        else { store.addWatch(code); store.toast("已添加 $name") }
+                    },
+                    leading = { MarketBadge(code) },
+                    label = {
+                        Text(name, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    },
+                    secondaryLabel = { Text(Mk.marketName(code) + " · " + code, fontSize = 10.sp) },
+                    trailing = { TinySwitch(added) }
+                )
+            }
         }
-        item { Spacer(Modifier.height(20.dp)) }
     }
 }
 
@@ -1541,6 +1775,9 @@ fun showSearchDialog(store: Store, activity: Activity?) {
 /* ---- 货币互通 · 换汇 ---- */
 @Composable
 fun ExchangeScreen(store: Store, nav: androidx.navigation.NavHostController) {
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val t = store.tick
     val ctx = LocalContext.current
     val curs = listOf("CNY", "HKD", "USD")
@@ -1551,67 +1788,97 @@ fun ExchangeScreen(store: Store, nav: androidx.navigation.NavHostController) {
     val cross = Fx.rate(from) / Fx.rate(to)   // 1单位from = ? to
     val recv = amt * cross * 0.998            // 0.2% 点差(模拟真实换汇成本)
 
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item { ListHeader { Text("货币互通 · 换汇", fontSize = 15.sp, fontWeight = FontWeight.Medium) } }
-        item { Text("实时汇率 · 更新 ${Fx.updated}", fontSize = 10.sp, color = Dim) }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                CompactChip(
-                    onClick = { from = curs[(curs.indexOf(from) + 1) % 3] },
-                    label = { Text(symOf(from) + " " + from, fontSize = 12.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Pri)
-                )
-                Text("→", fontSize = 15.sp, color = Dim)
-                CompactChip(
-                    onClick = { to = curs[(curs.indexOf(to) + 1) % 3] },
-                    label = { Text(symOf(to) + " " + to, fontSize = 12.sp) },
-                    colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = SurfHigh, contentColor = Pri)
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) { Text("货币互通 · 换汇") }
+            }
+            item {
+                Text(
+                    "实时汇率 · 更新 ${Fx.updated}",
+                    fontSize = 10.sp, color = cs.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    textAlign = TextAlign.Center
                 )
             }
-        }
-        item { Text("1${symOf(from)} = ${f2(cross, 4)}${symOf(to)}", fontSize = 12.sp, color = TxtMid) }
-        item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("金额 ${symOf(from)}", fontSize = 10.sp, color = Dim)
-                Text(f2(amt, 0), fontSize = 26.sp, fontWeight = FontWeight.Medium, color = Color.White)
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    CompactChip(onClick = { amt = max(0.0, amt - 1000) }, label = { Text("−1000", fontSize = 11.sp) })
-                    CompactChip(onClick = { amt += 1000 }, label = { Text("+1000", fontSize = 11.sp) })
+            item(key = "curs") {
+                Row(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    MiniChip(symOf(from) + " " + from, color = cs.primary) {
+                        from = curs[(curs.indexOf(from) + 1) % 3]
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text("→", fontSize = 15.sp, color = cs.onSurfaceVariant)
+                    Spacer(Modifier.width(8.dp))
+                    MiniChip(symOf(to) + " " + to, color = cs.primary) {
+                        to = curs[(curs.indexOf(to) + 1) % 3]
+                    }
                 }
             }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                listOf("25%" to 0.25, "50%" to 0.5, "全部" to 1.0).forEach { (label, r) ->
-                    CompactChip(onClick = {
-                        amt = round2(((store.engine.acc.cash[from] ?: 0.0) * r))
-                    }, label = { Text(label, fontSize = 11.sp) })
+            item {
+                Text(
+                    "1${symOf(from)} = ${f2(cross, 4)}${symOf(to)}",
+                    fontSize = 12.sp, color = cs.onSurface,
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    textAlign = TextAlign.Center
+                )
+            }
+            item {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("金额 ${symOf(from)}", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                        Text(f2(amt, 0), fontSize = 24.sp, fontWeight = FontWeight.Medium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            MiniChip("−1000") { amt = max(0.0, amt - 1000) }
+                            MiniChip("+1000") { amt += 1000 }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            listOf("25%" to 0.25, "50%" to 0.5, "全部" to 1.0).forEach { (label, r) ->
+                                MiniChip(label) {
+                                    amt = round2(((store.engine.acc.cash[from] ?: 0.0) * r))
+                                }
+                            }
+                        }
+                    }
                 }
             }
-        }
-        item {
-            Text("点差 0.2% · 实收 ≈ ${symOf(to)}${f2(recv)}", fontSize = 11.sp, color = Gold)
-            Text("可用 ${symOf(from)}${shortNum(store.engine.acc.cash[from] ?: 0.0)}",
-                fontSize = 10.sp, color = Dim)
-        }
-        item {
-            Button(
-                onClick = {
+            item {
+                Column(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("点差 0.2% · 实收 ≈ ${symOf(to)}${f2(recv)}",
+                        fontSize = 11.sp, color = cs.tertiary)
+                    Text("可用 ${symOf(from)}${shortNum(store.engine.acc.cash[from] ?: 0.0)}",
+                        fontSize = 10.sp, color = cs.onSurfaceVariant)
+                }
+            }
+            item {
+                ActionCapsule(
+                    "确认换汇", cs.primary, cs.onPrimary,
+                    modifier = Modifier.transformedHeight(this, spec)
+                ) {
                     buzz(ctx, 15)
                     val err = store.engine.exchange(from, to, amt)
                     if (err == null) {
                         store.toast("✓ 已换汇 ${symOf(to)}${f2(recv)}")
                         store.tick++
                     } else store.toast(err)
-                },
-                colors = ButtonDefaults.buttonColors(backgroundColor = Pri, contentColor = OnPri)
-            ) { Text("确认换汇", fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-            Spacer(Modifier.height(30.dp))
+                }
+            }
         }
     }
 }
@@ -1620,15 +1887,15 @@ fun ExchangeScreen(store: Store, nav: androidx.navigation.NavHostController) {
 @Composable
 fun ConfirmOverlay(store: Store) {
     if (store.confirmPhase == 0) return
+    val cs = MaterialTheme.colorScheme
     Box(
         Modifier.fillMaxSize().background(Color(0xF0000000)),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             if (store.confirmPhase == 1) {
-                androidx.wear.compose.material.CircularProgressIndicator(
-                    modifier = Modifier.size(60.dp),
-                    indicatorColor = Pri
+                CircularProgressIndicator(
+                    modifier = Modifier.size(60.dp)
                 )
             } else {
                 val ok = store.confirmPhase == 2
@@ -1638,9 +1905,10 @@ fun ConfirmOverlay(store: Store) {
                 )
             }
             Spacer(Modifier.height(10.dp))
-            Text(store.confirmText, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Color.White)
+            Text(store.confirmText, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                color = cs.onSurface)
             if (store.confirmSub.isNotBlank()) {
-                Text(store.confirmSub, fontSize = 11.sp, color = Dim)
+                Text(store.confirmSub, fontSize = 11.sp, color = cs.onSurfaceVariant)
             }
         }
     }
@@ -1650,16 +1918,17 @@ fun ConfirmOverlay(store: Store) {
 @Composable
 fun ToastBar(store: Store) {
     val msg = store.toastMsg ?: return
+    val cs = MaterialTheme.colorScheme
     LaunchedEffect(msg) {
         kotlinx.coroutines.delay(2200)
         if (store.toastMsg == msg) store.toastMsg = null
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Text(
-            msg, fontSize = 12.sp, color = Color.White,
+            msg, fontSize = 12.sp, color = cs.onSurface,
             modifier = Modifier
                 .padding(bottom = 40.dp)
-                .background(SurfHigh, RoundedCornerShape(100))
+                .background(cs.surfaceContainerHigh, BarCapsuleShape)
                 .padding(horizontal = 18.dp, vertical = 8.dp)
         )
     }
@@ -1804,7 +2073,7 @@ object Tutorial {
                 "T+0、无涨跌停、1股起买。交易时间=北京时间夜里(夏令21:30-4:00, 冬令22:30-5:00), 有盘前盘后交易。",
                 "苹果/特斯拉/英伟达等核心资产长期趋势向上, 是全球资金的主战场。"),
             TSection("汇率影响",
-                "港币挂钩美元, 人民币兑美元波动会直接影响你的实际收益: 股票不涨不跌, 人民币升值你就亏汇兑。本App用固定汇率模拟(1HKD=0.92, 1USD=7.15)。"),
+                "港币挂钩美元, 人民币兑美元波动会直接影响你的实际收益: 股票不涨不跌, 人民币升值你就亏汇兑。本App用实时汇率折算总资产。"),
             TSection("新手出海建议",
                 "先从最熟悉的巨头开始(腾讯/苹果), 避开中概小票和妖股。港美股波动更剧烈, 仓位更要控制。")
         )),
@@ -1858,30 +2127,60 @@ object Tutorial {
 /* ---- 教程列表 ---- */
 @Composable
 fun TutorialScreen(store: Store, nav: androidx.navigation.NavHostController) {
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val ctx = LocalContext.current
-    val listState = rememberScalingLazyListState()
-    ScalingLazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item { ListHeader { Text("零基础炒股教程", fontSize = 15.sp, fontWeight = FontWeight.Medium) } }
-        item { Text("12课 · 完整离线 · 从0到入门", fontSize = 10.sp, color = Dim) }
-        items(Tutorial.chapters.size) { i ->
-            val ch = Tutorial.chapters[i]
-            StackedCard(listState, i, onClick = {
-                buzz(ctx)
-                store.curChapter = i
-                nav.navigate("chapter")
-            }) {
-                Text("${i + 1}. ${ch.title}", fontSize = 14.sp, color = Color.White)
-                Text(ch.sub, fontSize = 10.sp, color = Dim)
+
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) { Text("零基础炒股教程") }
             }
-        }
-        item {
-            Text("建议按顺序学习\n每课3分钟, 全程约40分钟", fontSize = 10.sp, color = Dim,
-                textAlign = TextAlign.Center)
-            Spacer(Modifier.height(20.dp))
+            item {
+                Text(
+                    "12课 · 完整离线 · 从0到入门",
+                    fontSize = 10.sp, color = cs.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    textAlign = TextAlign.Center
+                )
+            }
+            items(Tutorial.chapters.size) { i ->
+                val ch = Tutorial.chapters[i]
+                BarCapsule(
+                    containerColor = cs.surfaceContainerHigh,
+                    contentColor = cs.onSurface,
+                    secondaryContentColor = cs.onSurfaceVariant,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = {
+                        buzz(ctx)
+                        store.curChapter = i
+                        nav.navigate("chapter")
+                    },
+                    label = {
+                        Text("${i + 1}. ${ch.title}", fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    },
+                    secondaryLabel = {
+                        Text(ch.sub, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    },
+                    trailing = {
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                )
+            }
         }
     }
 }
@@ -1889,30 +2188,54 @@ fun TutorialScreen(store: Store, nav: androidx.navigation.NavHostController) {
 /* ---- 教程内容页 ---- */
 @Composable
 fun ChapterScreen(store: Store) {
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
     val ch = Tutorial.chapters[store.curChapter]
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item { ListHeader { Text("${store.curChapter + 1}/${Tutorial.chapters.size} ${ch.title}",
-            fontSize = 14.sp, fontWeight = FontWeight.Medium) } }
-        for (sec in ch.sections) {
+
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
             item {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(sec.h, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Pri)
-                    Spacer(Modifier.height(4.dp))
-                    for (p in sec.body) {
-                        Text(p, fontSize = 11.sp, color = Color(0xFFDADCE0),
-                            textAlign = TextAlign.Center, lineHeight = 15.sp)
-                        Spacer(Modifier.height(6.dp))
-                    }
-                    Spacer(Modifier.height(6.dp))
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) {
+                    Text(
+                        "${store.curChapter + 1}/${Tutorial.chapters.size} ${ch.title}",
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
-        }
-        item {
-            Text("← 右滑返回课程列表", fontSize = 10.sp, color = Dim)
-            Spacer(Modifier.height(20.dp))
+            for (sec in ch.sections) {
+                item {
+                    StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                        modifier = Modifier.transformedHeight(this, spec)) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(sec.h, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                                color = cs.primary)
+                            Spacer(Modifier.height(4.dp))
+                            for (p in sec.body) {
+                                Text(p, fontSize = 11.sp, color = cs.onSurface,
+                                    lineHeight = 15.sp)
+                                Spacer(Modifier.height(5.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Text(
+                    "← 右滑返回课程列表",
+                    fontSize = 10.sp, color = cs.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }
