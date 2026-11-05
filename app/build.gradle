@@ -11,8 +11,8 @@ android {
         applicationId 'com.workbuddy.stocksim'
         minSdk 25
         targetSdk 34
-        versionCode 4
-        versionName '2.0.1'
+        versionCode 5
+        versionName '2.1.0'
     }
 
     buildFeatures { compose true }
@@ -24,8 +24,12 @@ android {
     kotlinOptions { jvmTarget = '1.8' }
 
     buildTypes {
+        debug { minifyEnabled false }
         release {
-            minifyEnabled false
+            // R8 压缩 + 资源收缩 + 混淆
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.debug
         }
     }

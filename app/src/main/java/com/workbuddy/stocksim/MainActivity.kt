@@ -13,6 +13,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,9 +34,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -81,14 +86,20 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /* ================= 常量 ================= */
+// 涨跌色为语义色, 不随主题种子变化
 val Up = Color(0xFFF28B82)
 val Down = Color(0xFF6DD58C)
-val Gold = Color(0xFFFDD663)
 val Dark1 = Color(0xFF3B0905)
 val Dark2 = Color(0xFF03210F)
-val Dim = Color(0xFF8D9199)
-val Pri = Color(0xFFA8C7FA)
-val OnPri = Color(0xFF062E6F)
+
+// 其余颜色来自种子配色主题 (Theme.kt), 随主题切换即时生效
+val Gold: Color get() = SchemeState.ter
+val Dim: Color get() = SchemeState.txtDim
+val Pri: Color get() = SchemeState.pri
+val OnPri: Color get() = SchemeState.onPri
+val Surf: Color get() = SchemeState.surf
+val SurfHigh: Color get() = SchemeState.surfHigh
+val TxtMid: Color get() = SchemeState.txtMid
 
 fun upDownColor(v: Double): Color = if (v > 0) Up else if (v < 0) Down else Dim
 fun signed(v: Double, d: Int = 2): String =
@@ -146,10 +157,8 @@ object Mk {
         else -> 100
     }
 
-    /** 折算人民币汇率(模拟器固定汇率) */
-    fun fx(cur: String): Double = when (cur) {
-        "HKD" -> 0.92; "USD" -> 7.15; else -> 1.0
-    }
+    /** 折算人民币汇率(实时, 新浪外汇) */
+    fun fx(cur: String): Double = Fx.rate(cur)
 
     /** 买入费用 */
     fun buyFee(code: String, amt: Double): Double = when (market(code)) {
@@ -225,9 +234,9 @@ class Account {
     companion object {
         val CURS = listOf("CNY", "HKD", "USD")
         val INITIAL = mapOf("CNY" to 1000000.0, "HKD" to 100000.0, "USD" to 10000.0)
-        /** 初始总资产折人民币 */
-        val INITIAL_TOTAL_CNY =
-            INITIAL["CNY"]!! + INITIAL["HKD"]!! * Mk.fx("HKD") + INITIAL["USD"]!! * Mk.fx("USD")
+        /** 初始总资产折人民币(按实时汇率动态计算) */
+        fun initialTotalCny(): Double =
+            INITIAL["CNY"]!! + INITIAL["HKD"]!! * Fx.rate("HKD") + INITIAL["USD"]!! * Fx.rate("USD")
     }
 
     val cash = mutableMapOf("CNY" to 1000000.0, "HKD" to 100000.0, "USD" to 10000.0)
@@ -522,6 +531,20 @@ class Engine(private val ctx: Context) {
     }
 
     fun reset() { acc = Account(); save() }
+
+    /**
+     * 货币互通: 按 (from→to) 交叉汇率换汇, 收取 0.2% 点差(模拟真实换汇成本)。
+     */
+    fun exchange(from: String, to: String, amt: Double): String? {
+        if (from == to) return "请选择两种不同货币"
+        if (amt <= 0) return "金额无效"
+        if ((acc.cash[from] ?: 0.0) < amt - 1e-6) return "可用余额不足"
+        val recv = amt * (Fx.rate(from) / Fx.rate(to)) * (1 - 0.002)
+        acc.cash[from] = (acc.cash[from] ?: 0.0) - amt
+        acc.cash[to] = (acc.cash[to] ?: 0.0) + recv
+        save()
+        return null
+    }
 }
 
 /* ================= 行情网络层 ================= */
@@ -582,8 +605,11 @@ class Market {
 
     private fun num(s: String) = s.toDoubleOrNull() ?: 0.0
 
-    /** 日K收盘价序列 (全部市场统一走腾讯 ifzq 接口) */
-    fun fetchSpark(code: String): List<Float>? {
+    /** 日K收盘价序列: A股/港股走腾讯 ifzq, 美股走新浪(腾讯对美股只返回2根K线导致曲线为直线) */
+    fun fetchSpark(code: String): List<Float>? =
+        if (Mk.market(code) == "US") sparkUs(code) else sparkIfzq(code)
+
+    private fun sparkIfzq(code: String): List<Float>? {
         return try {
             val txt = httpGet(
                 "https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param=$code,day,,,48",
@@ -595,6 +621,26 @@ class Market {
             for (i in start until arr.length()) {
                 val row = arr.getJSONArray(i)
                 val c = row.optString(2).toFloatOrNull()
+                if (c != null) r.add(c)
+            }
+            if (r.size >= 2) r else null
+        } catch (_: Exception) { null }
+    }
+
+    /** 新浪美股日K: 完整历史 JSON, 取最近 48 根收盘价 */
+    private fun sparkUs(code: String): List<Float>? {
+        return try {
+            val sym = code.substring(2)
+            val txt = httpGet(
+                "https://stock.finance.sina.com.cn/usstock/api/jsonp_v2.php/var%20_x=/US_MinKService.getDailyK?symbol=$sym",
+                "https://finance.sina.com.cn/")
+            val i = txt.indexOf('['); val j = txt.lastIndexOf(']')
+            if (i < 0 || j <= i) return null
+            val arr = JSONArray(txt.substring(i, j + 1))
+            val r = ArrayList<Float>()
+            val start = max(0, arr.length() - 48)
+            for (k in start until arr.length()) {
+                val c = arr.getJSONObject(k).optString("c").toFloatOrNull()
                 if (c != null) r.add(c)
             }
             if (r.size >= 2) r else null
@@ -645,6 +691,7 @@ class Store(val ctx: Context) {
     var toastMsg by mutableStateOf<String?>(null)
     val searchResults = mutableStateListOf<Quote>()
     var curChapter by mutableStateOf(0)
+    var playDays by mutableStateOf(0)   // 游玩天数(从0开始, 按自然日递增)
 
     var watch: MutableList<String> = mutableListOf(
         "sh600519", "sz300750", "hk00700", "usAAPL", "sh510300", "sz000001")
@@ -654,6 +701,26 @@ class Store(val ctx: Context) {
     init {
         val saved = prefs.getString("watch", null)
         if (saved != null && saved.isNotBlank()) watch = saved.split(",").toMutableList()
+        // 游玩天数: 首次启动记录日期, 之后按自然日从0递增 (独立key, 不影响存档)
+        val df = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
+        val todayStr = df.format(Date())
+        val firstDay = prefs.getString("first_day", null)
+        if (firstDay == null) {
+            prefs.edit().putString("first_day", todayStr).apply()
+            playDays = 0
+        } else {
+            playDays = try {
+                val t1 = df.parse(firstDay)!!.time; val t2 = df.parse(todayStr)!!.time
+                ((t2 - t1) / 86400000L).toInt().coerceAtLeast(0)
+            } catch (_: Exception) { 0 }
+        }
+        // 主题种子色 (独立key, 不影响存档)
+        applyTheme(ThemeSeed.fromId(prefs.getString("theme_seed", null) ?: "blue"))
+    }
+
+    fun setTheme(s: ThemeSeed) {
+        applyTheme(s)
+        prefs.edit().putString("theme_seed", s.id).apply()
     }
 
     fun saveWatch() { prefs.edit().putString("watch", watch.joinToString(",")).apply() }
@@ -678,6 +745,7 @@ class Store(val ctx: Context) {
     fun toast(m: String) { toastMsg = m }
 
     fun refreshQuotesAsync() {
+        Fx.refreshIfNeeded()   // 每5分钟拉一次实时汇率
         val codes = allCodes()
         Thread {
             val q = market.fetchQuotes(codes)
@@ -761,7 +829,7 @@ class MainActivity : ComponentActivity() {
 fun WearApp(store: Store) {
     val navController = rememberSwipeDismissableNavController()
 
-    MaterialTheme {
+    MaterialTheme(colors = SchemeState.colors) {
         Box(Modifier.fillMaxSize()) {
             Scaffold(
                 timeText = { if (store.confirmPhase == 0) TimeText() },
@@ -776,6 +844,7 @@ fun WearApp(store: Store) {
                     composable("manage") { ManageScreen(store, navController) }
                     composable("tutorial") { TutorialScreen(store, navController) }
                     composable("chapter") { ChapterScreen(store) }
+                    composable("fx") { ExchangeScreen(store, navController) }
                 }
             }
             ConfirmOverlay(store)
@@ -799,7 +868,7 @@ fun WatchlistScreen(store: Store, nav: androidx.navigation.NavHostController) {
         item { ListHeader { Text("自选行情", fontSize = 16.sp, fontWeight = FontWeight.Medium) } }
         item {
             Text(
-                (if (store.marketOpen) "A股交易中" else "A股未开盘") + " · 模拟盘",
+                (if (store.marketOpen) "A股交易中" else "A股未开盘") + " · 模拟第 ${store.playDays} 天",
                 fontSize = 10.sp, color = Dim
             )
         }
@@ -809,13 +878,19 @@ fun WatchlistScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     onClick = { buzz(ctx); nav.navigate("positions") },
                     label = { Text("资产", fontSize = 11.sp) },
                     colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = Color(0xFF2C2C2E), contentColor = Pri)
+                        backgroundColor = SurfHigh, contentColor = Pri)
                 )
                 CompactChip(
                     onClick = { buzz(ctx); nav.navigate("orders") },
                     label = { Text("委托", fontSize = 11.sp) },
                     colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = Color(0xFF2C2C2E), contentColor = Pri)
+                        backgroundColor = SurfHigh, contentColor = Pri)
+                )
+                CompactChip(
+                    onClick = { buzz(ctx); nav.navigate("fx") },
+                    label = { Text("换汇", fontSize = 11.sp) },
+                    colors = ChipDefaults.secondaryChipColors(
+                        backgroundColor = SurfHigh, contentColor = Gold)
                 )
             }
         }
@@ -825,34 +900,36 @@ fun WatchlistScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     onClick = { buzz(ctx); nav.navigate("manage") },
                     label = { Text("自选", fontSize = 11.sp) },
                     colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = Color(0xFF2C2C2E), contentColor = Pri)
+                        backgroundColor = SurfHigh, contentColor = Pri)
                 )
                 CompactChip(
                     onClick = { buzz(ctx); nav.navigate("tutorial") },
                     label = { Text("教程", fontSize = 11.sp) },
                     colors = ChipDefaults.secondaryChipColors(
-                        backgroundColor = Color(0xFF2C2C2E), contentColor = Gold)
+                        backgroundColor = SurfHigh, contentColor = Gold)
                 )
             }
         }
         items(store.watch.size) { i ->
             val code = store.watch[i]
             val q = store.quotes[code]
-            Chip(
-                onClick = {
-                    buzz(ctx); store.currentCode = code; store.loadSparkAsync()
-                    nav.navigate("detail")
-                },
-                label = { Text(q?.name ?: code, fontSize = 14.sp, color = Color.White) },
-                secondaryLabel = {
+            StackedCard(listState, i, onClick = {
+                buzz(ctx); store.currentCode = code; store.loadSparkAsync()
+                nav.navigate("detail")
+            }) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(q?.name ?: code, fontSize = 14.sp, color = Color.White)
                     Text(
-                        (q?.let { Mk.sym(code) + f2(it.price) } ?: "—") + "  " +
-                            (q?.let { signed(it.changePct) + "%" } ?: ""),
-                        fontSize = 12.sp, color = upDownColor(q?.changePct ?: 0.0)
+                        q?.let { signed(it.changePct) + "%" } ?: "—",
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        color = upDownColor(q?.changePct ?: 0.0)
                     )
-                },
-                colors = ChipDefaults.chipColors(backgroundColor = Color(0xFF232326))
-            )
+                }
+                Text(
+                    q?.let { Mk.sym(code) + f2(it.price) } ?: "—",
+                    fontSize = 11.sp, color = TxtMid
+                )
+            }
         }
         item {
             Text("A股 · 港股 · 美股 · ETF\n在「自选」页搜索添加", fontSize = 10.sp, color = Dim,
@@ -861,88 +938,97 @@ fun WatchlistScreen(store: Store, nav: androidx.navigation.NavHostController) {
     }
 }
 
-/* ---- 个股详情 ---- */
+/* ---- 个股详情 (ScalingLazyColumn 适配圆形屏幕, 内容多时自动弧形滚动不溢出) ---- */
 @Composable
 fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
     val t = store.tick
     val code = store.currentCode
     val q = store.quotes[code]
     val ctx = LocalContext.current
-    Column(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+    ScalingLazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    Mk.marketName(code) + if (Mk.isFund(code)) "·基金" else "",
+                    fontSize = 9.sp, color = OnPri,
+                    modifier = Modifier.background(Pri, RoundedCornerShape(100))
+                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                )
+                Text(q?.name ?: code, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = Color.White)
+            }
+        }
+        item {
             Text(
-                Mk.marketName(code) + if (Mk.isFund(code)) "·基金" else "",
-                fontSize = 9.sp, color = OnPri,
-                modifier = Modifier.background(Pri, RoundedCornerShape(100))
-                    .padding(horizontal = 6.dp, vertical = 1.dp)
+                if (q != null) Mk.sym(code) + f2(q.price) else "—",
+                fontSize = 34.sp, fontWeight = FontWeight.Medium,
+                color = upDownColor(q?.changePct ?: 0.0)
             )
-            Text(q?.name ?: code, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = Color.White)
         }
-        Text(
-            if (q != null) Mk.sym(code) + f2(q.price) else "—",
-            fontSize = 36.sp, fontWeight = FontWeight.Medium,
-            color = upDownColor(q?.changePct ?: 0.0)
-        )
-        Text(
-            if (q != null) "${signed(q.change)}  ${signed(q.changePct)}%" else "",
-            fontSize = 14.sp, fontWeight = FontWeight.Medium,
-            color = upDownColor(q?.changePct ?: 0.0)
-        )
-        Spacer(Modifier.height(6.dp))
-        Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0, Modifier.fillMaxWidth().height(60.dp))
-        Spacer(Modifier.height(6.dp))
-        val capUnit = if (Mk.market(code) == "CN") "亿¥" else if (Mk.market(code) == "HK") "亿HK$" else "亿$"
-        val rows = mutableListOf(
-            "今开" to (q?.let { f2(it.open) } ?: "—"), "昨收" to (q?.let { f2(it.prevClose) } ?: "—"),
-            "最高" to (q?.let { f2(it.high) } ?: "—"), "最低" to (q?.let { f2(it.low) } ?: "—"),
-            "换手" to (q?.let { f2(it.turnover) + "%" } ?: "—"),
-            "市值" to (q?.let { f2(it.marketCap, 0) + capUnit } ?: "—"))
-        if (Mk.market(code) == "HK") rows.add("每手" to (q?.let { "${it.lot}股" } ?: "—"))
-        if (Mk.market(code) == "CN") {
-            rows.add("涨停" to (q?.let { f2(it.limitUp) } ?: "—"))
-            rows.add("跌停" to (q?.let { f2(it.limitDown) } ?: "—"))
+        item {
+            Text(
+                if (q != null) "${signed(q.change)}  ${signed(q.changePct)}%" else "",
+                fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                color = upDownColor(q?.changePct ?: 0.0)
+            )
         }
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            for (chunk in rows.chunked(2)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    for ((k, v) in chunk) {
-                        Row(Modifier.width(120.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(k, fontSize = 11.sp, color = Dim)
-                            Text(v, fontSize = 11.sp, color = Color(0xFFC4C6CD))
+        item {
+            Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
+                Modifier.fillMaxWidth().height(54.dp))
+        }
+        item {
+            val capUnit = if (Mk.market(code) == "CN") "亿¥" else if (Mk.market(code) == "HK") "亿HK$" else "亿$"
+            val rows = mutableListOf(
+                "今开" to (q?.let { f2(it.open) } ?: "—"), "昨收" to (q?.let { f2(it.prevClose) } ?: "—"),
+                "最高" to (q?.let { f2(it.high) } ?: "—"), "最低" to (q?.let { f2(it.low) } ?: "—"),
+                "换手" to (q?.let { f2(it.turnover) + "%" } ?: "—"),
+                "市值" to (q?.let { f2(it.marketCap, 0) + capUnit } ?: "—"))
+            if (Mk.market(code) == "HK") rows.add("每手" to (q?.let { "${it.lot}股" } ?: "—"))
+            if (Mk.market(code) == "CN") {
+                rows.add("涨停" to (q?.let { f2(it.limitUp) } ?: "—"))
+                rows.add("跌停" to (q?.let { f2(it.limitDown) } ?: "—"))
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                for (chunk in rows.chunked(2)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        for ((k, v) in chunk) {
+                            Row(Modifier.width(116.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(k, fontSize = 11.sp, color = Dim)
+                                Text(v, fontSize = 11.sp, color = TxtMid)
+                            }
                         }
                     }
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = {
-                    buzz(ctx)
-                    store.side = "buy"
-                    store.trPrice = q?.price ?: 0.0
-                    store.trQty = Mk.lot(code, q)
-                    nav.navigate("trade")
-                },
-                colors = ButtonDefaults.buttonColors(backgroundColor = Up, contentColor = Dark1)
-            ) { Text("买入", fontSize = 13.sp, fontWeight = FontWeight.Medium) }
-            Button(
-                onClick = {
-                    buzz(ctx)
-                    store.side = "sell"
-                    store.trPrice = q?.price ?: 0.0
-                    val p = store.engine.acc.positions[code]
-                    val avail = p?.let { store.engine.available(it) } ?: 0
-                    store.trQty = if (avail >= Mk.lot(code, q)) Mk.lot(code, q) else 0
-                    if (avail <= 0) store.toast(if (Mk.isT1(code)) "今日无可用数量(T+1)" else "暂无持仓")
-                    nav.navigate("trade")
-                },
-                colors = ButtonDefaults.buttonColors(backgroundColor = Down, contentColor = Dark2)
-            ) { Text("卖出", fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = {
+                        buzz(ctx)
+                        store.side = "buy"
+                        store.trPrice = q?.price ?: 0.0
+                        store.trQty = Mk.lot(code, q)
+                        nav.navigate("trade")
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Up, contentColor = Dark1)
+                ) { Text("买入", fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+                Button(
+                    onClick = {
+                        buzz(ctx)
+                        store.side = "sell"
+                        store.trPrice = q?.price ?: 0.0
+                        val p = store.engine.acc.positions[code]
+                        val avail = p?.let { store.engine.available(it) } ?: 0
+                        store.trQty = if (avail >= Mk.lot(code, q)) Mk.lot(code, q) else 0
+                        if (avail <= 0) store.toast(if (Mk.isT1(code)) "今日无可用数量(T+1)" else "暂无持仓")
+                        nav.navigate("trade")
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Down, contentColor = Dark2)
+                ) { Text("卖出", fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+            }
         }
     }
 }
@@ -1154,6 +1240,7 @@ fun PositionsScreen(store: Store, nav: androidx.navigation.NavHostController) {
     val ctx = LocalContext.current
     val acc = store.engine.acc
     val total = acc.totalCny(store.quotes)
+    val baseline = Account.initialTotalCny()
     val cashLine = Account.CURS.map { c ->
         val sym = when (c) { "HKD" -> "HK$"; "USD" -> "$"; else -> "¥" }
         sym + shortNum(acc.availableCash(c))
@@ -1168,12 +1255,29 @@ fun PositionsScreen(store: Store, nav: androidx.navigation.NavHostController) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("总资产 ¥${f2(total, 0)}", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Color.White)
                 Text(
-                    "总盈亏 ${signed(total - Account.INITIAL_TOTAL_CNY, 0)}",
-                    fontSize = 12.sp, color = upDownColor(total - Account.INITIAL_TOTAL_CNY)
+                    "总盈亏 ${signed(total - baseline, 0)}",
+                    fontSize = 12.sp, color = upDownColor(total - baseline)
                 )
                 Text("可用 $cashLine", fontSize = 10.sp, color = Dim,
                     textAlign = TextAlign.Center)
-                Text("汇率固定 1HKD=0.92 · 1USD=7.15", fontSize = 9.sp, color = Dim)
+                Text("实时汇率 1USD=¥${f2(Fx.rate("USD"), 3)} · 1HKD=¥${f2(Fx.rate("HKD"), 4)}",
+                    fontSize = 9.sp, color = Dim)
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                CompactChip(
+                    onClick = { buzz(ctx); nav.navigate("fx") },
+                    label = { Text("换汇", fontSize = 11.sp) },
+                    colors = ChipDefaults.secondaryChipColors(
+                        backgroundColor = SurfHigh, contentColor = Gold)
+                )
+                CompactChip(
+                    onClick = { resetFlow(store) },
+                    label = { Text("重置账户", fontSize = 11.sp) },
+                    colors = ChipDefaults.secondaryChipColors(
+                        backgroundColor = SurfHigh, contentColor = Up)
+                )
             }
         }
         val pos = acc.positions.values.toList()
@@ -1189,34 +1293,26 @@ fun PositionsScreen(store: Store, nav: androidx.navigation.NavHostController) {
             val pnl = (price - p.avgCost) * p.qty
             val pnlPct = if (p.avgCost > 0) (price / p.avgCost - 1) * 100 else 0.0
             val lot = Mk.lot(p.code, store.quotes[p.code])
-            Chip(
-                onClick = {
-                    buzz(ctx)
-                    store.currentCode = p.code
-                    store.side = "sell"
-                    store.trPrice = store.quotes[p.code]?.price ?: 0.0
-                    val avail = store.engine.available(p)
-                    store.trQty = if (avail >= lot) lot else 0
-                    if (avail <= 0) store.toast(if (Mk.isT1(p.code)) "今日无可用卖出(T+1)" else "无可卖数量")
-                    nav.navigate("trade")
-                },
-                label = { Text(p.name, fontSize = 14.sp, color = Color.White) },
-                secondaryLabel = {
-                    Text("${p.qty}股 · 可卖${store.engine.available(p)}   ${signed(pnl, 0)} ${signed(pnlPct)}%",
-                        fontSize = 12.sp, color = upDownColor(pnl))
-                },
-                colors = ChipDefaults.chipColors(backgroundColor = Color(0xFF232326))
-            )
+            StackedCard(listState, i, onClick = {
+                buzz(ctx)
+                store.currentCode = p.code
+                store.side = "sell"
+                store.trPrice = store.quotes[p.code]?.price ?: 0.0
+                val avail = store.engine.available(p)
+                store.trQty = if (avail >= lot) lot else 0
+                if (avail <= 0) store.toast(if (Mk.isT1(p.code)) "今日无可用卖出(T+1)" else "无可卖数量")
+                nav.navigate("trade")
+            }) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(p.name, fontSize = 14.sp, color = Color.White)
+                    Text("${signed(pnl, 0)} ${signed(pnlPct)}%",
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium, color = upDownColor(pnl))
+                }
+                Text("${p.qty}股 · 可卖${store.engine.available(p)} · 成本${Mk.sym(p.code)}${f2(p.avgCost)}",
+                    fontSize = 10.sp, color = TxtMid)
+            }
         }
-        item {
-            CompactChip(
-                onClick = { resetFlow(store) },
-                label = { Text("重置账户", fontSize = 11.sp) },
-                colors = ChipDefaults.secondaryChipColors(
-                    backgroundColor = Color(0xFF2C2C2E), contentColor = Up)
-            )
-            Spacer(Modifier.height(20.dp))
-        }
+        item { Spacer(Modifier.height(20.dp)) }
     }
 }
 
@@ -1276,7 +1372,7 @@ fun OrdersScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     "filled" -> "已成交 @${o.filledPrice}" to Down
                     else -> "已撤单" to Dim
                 }
-                Chip(
+                StackedCard(listState, i,
                     onClick = if (o.status == "pending") { {
                         buzz(ctx)
                         store.setConfirm(1, "撤销委托", "")
@@ -1289,19 +1385,18 @@ fun OrdersScreen(store: Store, nav: androidx.navigation.NavHostController) {
                                 store.hideConfirmLater()
                             }
                         }.start()
-                    } } else { {} },
-                    label = {
+                    } } else null
+                ) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(
                             o.name + " " + if (o.side == "buy") "买" else "卖",
                             fontSize = 14.sp, color = Color.White
                         )
-                    },
-                    secondaryLabel = {
-                        Text("${o.qty}股 @${Mk.sym(o.code)}${f2(o.price)} · ${st.first}",
-                            fontSize = 12.sp, color = st.second)
-                    },
-                    colors = ChipDefaults.chipColors(backgroundColor = Color(0xFF232326))
-                )
+                        Text("${o.qty}股 @${Mk.sym(o.code)}${f2(o.price)}",
+                            fontSize = 12.sp, color = TxtMid)
+                    }
+                    Text(st.first, fontSize = 11.sp, color = st.second)
+                }
             }
         } else {
             val ts = acc.trades
@@ -1310,25 +1405,22 @@ fun OrdersScreen(store: Store, nav: androidx.navigation.NavHostController) {
             }
             items(ts.size) { i ->
                 val tr = ts[i]
-                Chip(
-                    onClick = {},
-                    label = {
+                StackedCard(listState, i) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(
                             tr.name + " " + if (tr.side == "buy") "买入" else "卖出",
                             fontSize = 14.sp, color = Color.White
                         )
-                    },
-                    secondaryLabel = {
                         Text(
-                            "${tr.qty}股 @${Mk.sym(tr.code)}${f2(tr.price)} · " +
-                                if (!tr.pnl.isNaN()) signed(tr.pnl, 0)
-                                else Mk.sym(tr.code) + f2(tr.amount, 0),
-                            fontSize = 12.sp,
-                            color = if (!tr.pnl.isNaN()) upDownColor(tr.pnl) else Color(0xFFC4C6CD)
+                            if (!tr.pnl.isNaN()) signed(tr.pnl, 0)
+                            else Mk.sym(tr.code) + f2(tr.amount, 0),
+                            fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                            color = if (!tr.pnl.isNaN()) upDownColor(tr.pnl) else TxtMid
                         )
-                    },
-                    colors = ChipDefaults.chipColors(backgroundColor = Color(0xFF232326))
-                )
+                    }
+                    Text("${tr.qty}股 @${Mk.sym(tr.code)}${f2(tr.price)} · ${tr.time.take(16).substringAfter(' ')}",
+                        fontSize = 10.sp, color = TxtMid)
+                }
             }
         }
         item { Spacer(Modifier.height(20.dp)) }
@@ -1366,24 +1458,46 @@ fun ManageScreen(store: Store, nav: androidx.navigation.NavHostController) {
             Text("搜索支持: 中文名 / 代码 / 拼音\n如 腾讯 / 00700 / AAPL / 纳指",
                 fontSize = 9.sp, color = Dim, textAlign = TextAlign.Center)
         }
+        // 主题种子色选择器 (来自 AppOpsPro 的种子配色)
+        item { ListHeader { Text("主题种子色", fontSize = 12.sp, color = TxtMid) } }
+        val themeSeeds = ThemeSeed.colorSeeds.chunked(5)
+        items(themeSeeds.size) { ri ->
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                for (s in themeSeeds[ri]) {
+                    val selected = ThemeCurrent == s
+                    Box(
+                        Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(s.seed ?: Color(0xFF8D9199))
+                            .border(
+                                width = if (selected) 2.5.dp else 1.dp,
+                                color = if (selected) Color.White else Dim,
+                                shape = CircleShape
+                            )
+                            .clickable { buzz(ctx); store.setTheme(s) }
+                    )
+                }
+            }
+        }
+        item { ListHeader { Text("热门标的", fontSize = 12.sp, color = TxtMid) } }
         items(popular.size) { i ->
             val (code, name) = popular[i]
             val added = store.watch.contains(code)
-            ToggleChip(
-                checked = added,
-                onCheckedChange = {
-                    buzz(ctx)
-                    if (it) { store.addWatch(code); store.toast("已添加 $name") }
-                    else { store.removeWatch(code); store.toast("已移除 $name") }
-                },
-                label = {
+            StackedCard(listState, i, onClick = {
+                buzz(ctx)
+                if (added) { store.removeWatch(code); store.toast("已移除 $name") }
+                else { store.addWatch(code); store.toast("已添加 $name") }
+            }) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically) {
                     Column {
                         Text(name, fontSize = 14.sp, color = Color.White)
                         Text(Mk.marketName(code) + " · " + code, fontSize = 10.sp, color = Dim)
                     }
-                },
-                toggleControl = { Switch(checked = added, onCheckedChange = null) }
-            )
+                    Switch(checked = added, onCheckedChange = null)
+                }
+            }
         }
         item { Spacer(Modifier.height(20.dp)) }
     }
@@ -1422,6 +1536,84 @@ fun showSearchDialog(store: Store, activity: Activity?) {
         }
         .setNegativeButton("取消", null)
         .show()
+}
+
+/* ---- 货币互通 · 换汇 ---- */
+@Composable
+fun ExchangeScreen(store: Store, nav: androidx.navigation.NavHostController) {
+    val t = store.tick
+    val ctx = LocalContext.current
+    val curs = listOf("CNY", "HKD", "USD")
+    var from by rememberSaveable { mutableStateOf("CNY") }
+    var to by rememberSaveable { mutableStateOf("USD") }
+    var amt by rememberSaveable { mutableStateOf(1000.0) }
+    val symOf = { c: String -> if (c == "HKD") "HK$" else if (c == "USD") "$" else "¥" }
+    val cross = Fx.rate(from) / Fx.rate(to)   // 1单位from = ? to
+    val recv = amt * cross * 0.998            // 0.2% 点差(模拟真实换汇成本)
+
+    ScalingLazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        item { ListHeader { Text("货币互通 · 换汇", fontSize = 15.sp, fontWeight = FontWeight.Medium) } }
+        item { Text("实时汇率 · 更新 ${Fx.updated}", fontSize = 10.sp, color = Dim) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                CompactChip(
+                    onClick = { from = curs[(curs.indexOf(from) + 1) % 3] },
+                    label = { Text(symOf(from) + " " + from, fontSize = 12.sp) },
+                    colors = ChipDefaults.secondaryChipColors(
+                        backgroundColor = SurfHigh, contentColor = Pri)
+                )
+                Text("→", fontSize = 15.sp, color = Dim)
+                CompactChip(
+                    onClick = { to = curs[(curs.indexOf(to) + 1) % 3] },
+                    label = { Text(symOf(to) + " " + to, fontSize = 12.sp) },
+                    colors = ChipDefaults.secondaryChipColors(
+                        backgroundColor = SurfHigh, contentColor = Pri)
+                )
+            }
+        }
+        item { Text("1${symOf(from)} = ${f2(cross, 4)}${symOf(to)}", fontSize = 12.sp, color = TxtMid) }
+        item {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("金额 ${symOf(from)}", fontSize = 10.sp, color = Dim)
+                Text(f2(amt, 0), fontSize = 26.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    CompactChip(onClick = { amt = max(0.0, amt - 1000) }, label = { Text("−1000", fontSize = 11.sp) })
+                    CompactChip(onClick = { amt += 1000 }, label = { Text("+1000", fontSize = 11.sp) })
+                }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf("25%" to 0.25, "50%" to 0.5, "全部" to 1.0).forEach { (label, r) ->
+                    CompactChip(onClick = {
+                        amt = round2(((store.engine.acc.cash[from] ?: 0.0) * r))
+                    }, label = { Text(label, fontSize = 11.sp) })
+                }
+            }
+        }
+        item {
+            Text("点差 0.2% · 实收 ≈ ${symOf(to)}${f2(recv)}", fontSize = 11.sp, color = Gold)
+            Text("可用 ${symOf(from)}${shortNum(store.engine.acc.cash[from] ?: 0.0)}",
+                fontSize = 10.sp, color = Dim)
+        }
+        item {
+            Button(
+                onClick = {
+                    buzz(ctx, 15)
+                    val err = store.engine.exchange(from, to, amt)
+                    if (err == null) {
+                        store.toast("✓ 已换汇 ${symOf(to)}${f2(recv)}")
+                        store.tick++
+                    } else store.toast(err)
+                },
+                colors = ButtonDefaults.buttonColors(backgroundColor = Pri, contentColor = OnPri)
+            ) { Text("确认换汇", fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+            Spacer(Modifier.height(30.dp))
+        }
+    }
 }
 
 /* ---- 确认动效 ---- */
@@ -1467,7 +1659,7 @@ fun ToastBar(store: Store) {
             msg, fontSize = 12.sp, color = Color.White,
             modifier = Modifier
                 .padding(bottom = 40.dp)
-                .background(Color(0xFF3C3D41), RoundedCornerShape(100))
+                .background(SurfHigh, RoundedCornerShape(100))
                 .padding(horizontal = 18.dp, vertical = 8.dp)
         )
     }
@@ -1667,7 +1859,9 @@ object Tutorial {
 @Composable
 fun TutorialScreen(store: Store, nav: androidx.navigation.NavHostController) {
     val ctx = LocalContext.current
+    val listState = rememberScalingLazyListState()
     ScalingLazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -1675,16 +1869,14 @@ fun TutorialScreen(store: Store, nav: androidx.navigation.NavHostController) {
         item { Text("12课 · 完整离线 · 从0到入门", fontSize = 10.sp, color = Dim) }
         items(Tutorial.chapters.size) { i ->
             val ch = Tutorial.chapters[i]
-            Chip(
-                onClick = {
-                    buzz(ctx)
-                    store.curChapter = i
-                    nav.navigate("chapter")
-                },
-                label = { Text("${i + 1}. ${ch.title}", fontSize = 14.sp, color = Color.White) },
-                secondaryLabel = { Text(ch.sub, fontSize = 10.sp, color = Dim) },
-                colors = ChipDefaults.chipColors(backgroundColor = Color(0xFF232326))
-            )
+            StackedCard(listState, i, onClick = {
+                buzz(ctx)
+                store.curChapter = i
+                nav.navigate("chapter")
+            }) {
+                Text("${i + 1}. ${ch.title}", fontSize = 14.sp, color = Color.White)
+                Text(ch.sub, fontSize = 10.sp, color = Dim)
+            }
         }
         item {
             Text("建议按顺序学习\n每课3分钟, 全程约40分钟", fontSize = 10.sp, color = Dim,
