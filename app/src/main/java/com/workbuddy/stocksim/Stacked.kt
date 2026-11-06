@@ -78,13 +78,13 @@ private fun resolveTopFraction(
 }
 
 /* ============================================================
- * BarCapsule —— 移植自 AppOpsPro 的 AppBarItem.kt
- * 自绘条形胶囊卡片（跑道形），配合 transformedHeight 使用，
- * 堆叠过渡是「整行平滑收窄 + 变暗」，并自带 stackedShadow。
+ * BarCard —— 卡片形状与规格
+ * 卡片统一为常规圆角矩形 (14dp), 不再做跑道形胶囊。
+ * 配合 transformedHeight 使用, 堆叠过渡是「整行平滑收窄 + 变暗」。
  * ============================================================ */
 
-/** 形状用 percent=50：无论卡片被压缩到多低，两端恒为完整半圆（跑道形）。 */
-val BarCapsuleShape = RoundedCornerShape(percent = 50)
+/** 卡片圆角: 常规圆角矩形 */
+val BarCapsuleShape = RoundedCornerShape(14.dp)
 
 /** 条形胶囊高度：与 M3E 条形卡片一致（52dp）。 */
 val BarCapsuleHeight = 52.dp

@@ -17,7 +17,8 @@
 - **分币种资金池**：初始 ¥100万 + HK$10万 + $1万，总资产按**实时汇率**折算
 - **货币互通（换汇）**：¥/HK$/$ 互相兑换，0.2% 点差模拟真实换汇成本，汇率来自新浪外汇（盘中实时）
 - **游玩天数**：自选页显示「模拟第 N 天」，从 0 开始按自然日递增
-- **堆叠卡片列表（v2.2 重构）**：全面迁移到 Wear Compose **M3E**（`androidx.wear.compose.material3` 1.5.0）的 `ScreenScaffold` + `TransformingLazyColumn` + `transformedHeight/SurfaceTransformation` 官方堆叠变换，配合移植自 [AppOpsPro](https://github.com/lliiaannggyu/AppOpsPro) 的 `BarCapsule`（自绘跑道形胶囊）与 `stackedShadow`（卡片上滚时投影渐强、浮起压住下层），与 AppOpsPro 同一套列表视觉
+- **堆叠卡片列表（v2.3 更新）**：Wear Compose **M3E**（`androidx.wear.compose.material3` 1.5.0）的 `ScreenScaffold` + `TransformingLazyColumn` + `transformedHeight/SurfaceTransformation` 官方堆叠变换；卡片统一为**常规圆角矩形**（14dp，v2.3 去掉跑道形胶囊），滚动堆叠阴影保留
+- **GitHub 应用内更新（v2.3 新增）**：管理页「检查更新」一键查询 GitHub Releases → 比对版本号 → 应用内下载 APK（进度条）→ FileProvider 授权调起系统安装器；无 WebView、不跳浏览器
 - **主题种子色**：13 种 Material 种子色（Lab 色彩空间生成整套 Wear M3 ColorScheme，与 AppOpsPro 同款算法），管理页可即时切换
 - 工具链与 AppOpsPro 对齐：Kotlin 2.0.21 + Compose 插件 + BOM 2025.06 + compileSdk 35
 - **R8**：开启 minify + shrinkResources 混淆压缩，APK 体积 7MB → 912KB

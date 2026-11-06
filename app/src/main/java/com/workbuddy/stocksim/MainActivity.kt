@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -910,7 +911,8 @@ fun MiniChip(text: String, color: Color? = null, onClick: () -> Unit) {
     )
 }
 
-/** 迷你开关指示器 (m3 1.5 独立 Switch 为私有 API, 自绘同款视觉) */
+/** 迷你开关指示器 (m3 1.5 独立 Switch 为私有 API, 自绘同款视觉; 开关轨道保留胶囊形) */
+private val SwitchTrackShape = RoundedCornerShape(percent = 50)
 @Composable
 fun TinySwitch(checked: Boolean) {
     val cs = MaterialTheme.colorScheme
@@ -918,7 +920,7 @@ fun TinySwitch(checked: Boolean) {
         Modifier
             .width(32.dp)
             .height(18.dp)
-            .clip(BarCapsuleShape)
+            .clip(SwitchTrackShape)
             .background(if (checked) cs.primary else cs.surfaceContainer)
             .padding(2.dp),
         contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart
@@ -1644,6 +1646,11 @@ fun ManageScreen(store: Store, nav: androidx.navigation.NavHostController) {
     val t = store.tick
     val activity = LocalContext.current as? Activity
     val ctx = LocalContext.current
+    // 应用内更新状态: null=未检查 / info=有新版本 / progress>=0=下载中
+    var updInfo by remember { mutableStateOf<Updater.ReleaseInfo?>(null) }
+    var updChecking by remember { mutableStateOf(false) }
+    var updProgress by remember { mutableStateOf(-1) }
+    val curVer = remember { Updater.currentVersion(ctx) }
     val popular = listOf(
         "sh600519" to "贵州茅台", "sz300750" to "宁德时代", "sh601318" to "中国平安",
         "sz000858" to "五粮液", "sh688981" to "中芯国际", "sz300059" to "东方财富",
@@ -1701,6 +1708,90 @@ fun ManageScreen(store: Store, nav: androidx.navigation.NavHostController) {
                                             )
                                             .clickable { buzz(ctx); store.setTheme(s) }
                                     )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            item(key = "update") {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        when {
+                            updProgress >= 0 -> {
+                                Text("正在下载更新 $updProgress%", fontSize = 12.sp,
+                                    color = cs.onSurface, fontWeight = FontWeight.Medium)
+                                Spacer(Modifier.height(6.dp))
+                                CircularProgressIndicator(
+                                    progress = { updProgress / 100f },
+                                    modifier = Modifier.size(32.dp),
+                                    strokeWidth = 4.dp
+                                )
+                            }
+                            updInfo != null -> {
+                                val info = updInfo!!
+                                Text("发现新版本 v${info.version}", fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium, color = cs.primary)
+                                if (info.notes.isNotBlank()) {
+                                    Spacer(Modifier.height(3.dp))
+                                    Text(info.notes.lines().take(4).joinToString("\n"),
+                                        fontSize = 10.sp, color = cs.onSurfaceVariant,
+                                        maxLines = 4, overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center)
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                ActionCapsule("下载并安装", cs.primary, cs.onPrimary,
+                                    modifier = Modifier.fillMaxWidth()) {
+                                    buzz(ctx)
+                                    updProgress = 0
+                                    Updater.downloadAsync(
+                                        ctx, info,
+                                        onProgress = { updProgress = it },
+                                        onDone = { f ->
+                                            updProgress = -1
+                                            Updater.install(ctx, f)
+                                        },
+                                        onFail = { msg ->
+                                            updProgress = -1
+                                            store.toast("更新失败: $msg")
+                                        }
+                                    )
+                                }
+                            }
+                            else -> {
+                                val label = if (updChecking) "正在检查…" else "检查更新"
+                                val sub = "当前 v$curVer · GitHub Release"
+                                Row(
+                                    Modifier.fillMaxWidth().clip(BarCapsuleShape)
+                                        .background(cs.surfaceContainer)
+                                        .clickable(enabled = !updChecking) {
+                                            buzz(ctx)
+                                            updChecking = true
+                                            Updater.checkAsync(ctx) { r ->
+                                                updChecking = false
+                                                if (r != null && Updater.cmpVersion(r.version, curVer) > 0) {
+                                                    updInfo = r
+                                                } else if (r != null) {
+                                                    store.toast("已是最新版本 v$curVer")
+                                                } else {
+                                                    store.toast("检查失败, 请确认网络")
+                                                }
+                                            }
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                        Text(sub, fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                    }
+                                    if (updChecking) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                                    } else {
+                                        Icon(Icons.Filled.KeyboardArrowUp, contentDescription = null,
+                                            modifier = Modifier.size(18.dp))
+                                    }
                                 }
                             }
                         }
