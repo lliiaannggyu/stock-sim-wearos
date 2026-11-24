@@ -629,8 +629,11 @@ class Market {
         } catch (_: Exception) { null }
     }
 
-    /** 分时序列: 主用腾讯 ifzq 分时(全市场), A股兜底新浪5分钟K。返回 (价格序列, 最后时间) */
-    fun fetchMinute(code: String): Pair<List<Float>, String>? {
+    /** 分时数据: 价格 + 每分钟成交量 + 最后时间 */
+    class MinuteData(val prices: List<Float>, val vols: List<Float>, val time: String)
+
+    /** 分时序列: 主用腾讯 ifzq 分时(全市场), A股兜底新浪5分钟K */
+    fun fetchMinute(code: String): MinuteData? {
         try {
             val txt = httpGet(
                 "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=$code",
@@ -639,13 +642,19 @@ class Market {
                 .getJSONObject("data")
             val arr = node.optJSONArray("data") ?: return null
             val r = ArrayList<Float>()
+            val v = ArrayList<Float>()
             var t = ""
             for (i in 0 until arr.length()) {
                 val s = arr.optString(i)
-                val p = s.split(" ").getOrNull(1)?.toFloatOrNull()
-                if (p != null && p > 0) { r.add(p); t = s.substringBefore(' ') }
+                val parts = s.split(" ")
+                val p = parts.getOrNull(1)?.toFloatOrNull()
+                if (p != null && p > 0) {
+                    r.add(p)
+                    v.add(parts.getOrNull(2)?.toFloatOrNull() ?: 0f)
+                    t = parts[0]
+                }
             }
-            if (r.size >= 2) return Pair(r, t)
+            if (r.size >= 2) return MinuteData(r, v, t)
         } catch (_: Exception) {}
         if (Mk.market(code) == "CN") {
             try {
@@ -656,16 +665,18 @@ class Market {
                 if (i >= 0 && j > i) {
                     val arr = JSONArray(txt.substring(i, j + 1))
                     val r = ArrayList<Float>()
+                    val v = ArrayList<Float>()
                     var t = ""
                     for (k in 0 until arr.length()) {
                         val o = arr.getJSONObject(k)
                         val c = o.optString("close").toFloatOrNull()
                         if (c != null && c > 0) {
                             r.add(c)
+                            v.add(o.optString("volume").toFloatOrNull() ?: 0f)
                             t = o.optString("day").substringAfter(' ')
                         }
                     }
-                    if (r.size >= 2) return Pair(r, t)
+                    if (r.size >= 2) return MinuteData(r, v, t)
                 }
             } catch (_: Exception) {}
         }
@@ -820,8 +831,9 @@ class Store(val ctx: Context) {
         }.start()
     }
 
-    /** 分时曲线 + 数据时间 (详情页每30秒自动刷新) */
+    /** 分时曲线 + 成交量 + 数据时间 (详情页每30秒自动刷新) */
     var minute by mutableStateOf<List<Float>?>(null)
+    var minuteVol by mutableStateOf<List<Float>?>(null)
     var minuteTime by mutableStateOf("")
 
     fun loadMinuteAsync() {
@@ -830,8 +842,8 @@ class Store(val ctx: Context) {
         Thread {
             val d = market.fetchMinute(code)
             ui.post {
-                if (currentCode == code) {
-                    if (d != null) { minute = d.first; minuteTime = d.second }
+                if (currentCode == code && d != null) {
+                    minute = d.prices; minuteVol = d.vols; minuteTime = d.time
                 }
             }
         }.start()
@@ -858,12 +870,36 @@ class Store(val ctx: Context) {
 
 /* ================= Activity ================= */
 
+/** 包名变更 (com.tengwear.chaogu 前身为 com.workbuddy.stocksim): 首次安装自动迁移旧存档 */
+fun migrateOldData(ctx: Context) {
+    try {
+        val dest = File(ctx.filesDir, "account.json")
+        if (dest.exists()) return
+        val old = ctx.createPackageContext("com.workbuddy.stocksim", Context.CONTEXT_IGNORE_SECURITY)
+        val src = File(old.filesDir, "account.json")
+        if (src.exists()) src.copyTo(dest, overwrite = true)
+        val sp = old.getSharedPreferences("sim", Context.MODE_PRIVATE).all
+        if (sp.isNotEmpty()) {
+            val ed = ctx.getSharedPreferences("sim", Context.MODE_PRIVATE).edit()
+            for ((k, v) in sp) when (v) {
+                is String -> ed.putString(k, v)
+                is Int -> ed.putInt(k, v)
+                is Long -> ed.putLong(k, v)
+                is Float -> ed.putFloat(k, v)
+                is Boolean -> ed.putBoolean(k, v)
+            }
+            ed.apply()
+        }
+    } catch (_: Exception) {}
+}
+
 class MainActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var running = true
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        migrateOldData(applicationContext)
         val store = Store(applicationContext)
         setContent { WearApp(store) }
         loopQuotes(store)
@@ -1197,10 +1233,10 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     }
                     Spacer(Modifier.height(4.dp))
                     if (chartMode == "min" && store.minute != null) {
-                        MinuteChart(store.minute, q?.prevClose ?: 0.0,
-                            Modifier.fillMaxWidth().height(54.dp))
+                        MinuteChart(store.minute, store.minuteVol, q?.prevClose ?: 0.0,
+                            Modifier.fillMaxWidth().height(72.dp))
                         Text(
-                            if (store.minuteTime.isNotBlank()) "分时 · 数据时间 ${store.minuteTime} · 30秒刷新" else "分时 · 30秒刷新",
+                            if (store.minuteTime.isNotBlank()) "分时量 · ${store.minuteTime} · 30秒刷新" else "分时 · 30秒刷新",
                             fontSize = 9.sp, color = cs.onSurfaceVariant)
                     } else {
                         Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
@@ -1303,16 +1339,18 @@ fun Sparkline(data: List<Float>?, up: Boolean, modifier: Modifier) {
     }
 }
 
-/** 分时曲线: 相对昨收的走势, 昨收虚线基准 + 端点实时圆点 */
+/** 分时曲线: 走势 + 下方成交量柱 + 昨收虚线 + 最新价端点 */
 @Composable
-fun MinuteChart(data: List<Float>?, prevClose: Double, modifier: Modifier) {
+fun MinuteChart(data: List<Float>?, vols: List<Float>?, prevClose: Double, modifier: Modifier) {
     Canvas(modifier) {
         if (data == null || data.size < 2 || prevClose <= 0) return@Canvas
         val base = prevClose.toFloat()
         val mn = minOf(data.min(), base)
         val mx = maxOf(data.max(), base)
         val rng = (mx - mn).takeIf { it > 0 } ?: 1f
-        fun y(v: Float) = size.height - 6f - (v - mn) / rng * (size.height - 12f)
+        val volH = size.height * 0.28f
+        val priceH = size.height - volH
+        fun y(v: Float) = priceH - 6f - (v - mn) / rng * (priceH - 12f)
         val col = if (data.last() >= base) Up else Down
         // 昨收虚线
         val yb = y(base)
@@ -1330,14 +1368,26 @@ fun MinuteChart(data: List<Float>?, prevClose: Double, modifier: Modifier) {
         drawPath(path, col, style = Stroke(3f, cap = StrokeCap.Round))
         val fill = Path().apply {
             addPath(path)
-            lineTo(size.width, size.height); lineTo(0f, size.height); close()
+            lineTo(size.width, priceH); lineTo(0f, priceH); close()
         }
         drawPath(fill, col.copy(alpha = 0.15f))
-        // 最新点
-        drawCircle(
-            col, radius = 4f,
-            center = Offset(size.width, y(data.last()))
-        )
+        // 最新价端点
+        drawCircle(col, radius = 4f, center = Offset(size.width, y(data.last())))
+        // 成交量柱: 每分钟量, 按相对前一笔涨跌着色
+        if (vols != null && vols.isNotEmpty()) {
+            val maxVol = vols.max().takeIf { it > 0 } ?: 1f
+            val bw = size.width / data.size * 0.7f
+            data.indices.forEach { i ->
+                val x = i.toFloat() / maxOf(1, data.size - 1) * (size.width - bw)
+                val h = (vols[i] / maxVol) * (volH - 6f)
+                val c = if (i > 0 && data[i] < data[i - 1]) Down else Up
+                drawRect(
+                    c.copy(alpha = 0.55f),
+                    Offset(x, size.height - h),
+                    androidx.compose.ui.geometry.Size(bw, h)
+                )
+            }
+        }
     }
 }
 

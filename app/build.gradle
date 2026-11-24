@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace 'com.workbuddy.stocksim'
+    namespace 'com.tengwear.chaogu'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.workbuddy.stocksim'
+        applicationId 'com.tengwear.chaogu'
         minSdk 25
         targetSdk 34
-        versionCode 8
-        versionName '2.3.1'
+        versionCode 9
+        versionName '2.4.0'
     }
 
     buildFeatures { compose true }

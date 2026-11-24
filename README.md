@@ -18,7 +18,9 @@
 - **货币互通（换汇）**：¥/HK$/$ 互相兑换，0.2% 点差模拟真实换汇成本，汇率来自新浪外汇（盘中实时）
 - **游玩天数**：自选页显示「模拟第 N 天」，从 0 开始按自然日递增
 - **堆叠卡片列表（v2.3 更新）**：Wear Compose **M3E**（`androidx.wear.compose.material3` 1.5.0）的 `ScreenScaffold` + `TransformingLazyColumn` + `transformedHeight/SurfaceTransformation` 官方堆叠变换；卡片统一为**常规圆角矩形**（14dp，v2.3 去掉跑道形胶囊），滚动堆叠阴影保留
+- **包名 `com.tengwear.chaogu`**（v2.4 起，旧包名 `com.workbuddy.stocksim` 首次安装自动迁移存档）
 - **GitHub 应用内更新（v2.3 新增）**：管理页「检查更新」一键查询 GitHub Releases → 比对版本号 → 应用内下载 APK（进度条）→ FileProvider 授权调起系统安装器；无 WebView、不跳浏览器
+- **分时图 + 成交量（v2.4）**：详情页分时走势（30秒自动刷新）带每分钟成交量柱、昨收虚线基准，可切换48日K线
 - **主题种子色**：13 种 Material 种子色（Lab 色彩空间生成整套 Wear M3 ColorScheme，与 AppOpsPro 同款算法），管理页可即时切换
 - 工具链与 AppOpsPro 对齐：Kotlin 2.0.21 + Compose 插件 + BOM 2025.06 + compileSdk 35
 - **R8**：开启 minify + shrinkResources 混淆压缩，APK 体积 7MB → 912KB
