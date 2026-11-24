@@ -40,8 +40,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -627,6 +629,49 @@ class Market {
         } catch (_: Exception) { null }
     }
 
+    /** 分时序列: 主用腾讯 ifzq 分时(全市场), A股兜底新浪5分钟K。返回 (价格序列, 最后时间) */
+    fun fetchMinute(code: String): Pair<List<Float>, String>? {
+        try {
+            val txt = httpGet(
+                "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=$code",
+                "https://gu.qq.com/")
+            val node = JSONObject(txt).getJSONObject("data").getJSONObject(code)
+                .getJSONObject("data")
+            val arr = node.optJSONArray("data") ?: return null
+            val r = ArrayList<Float>()
+            var t = ""
+            for (i in 0 until arr.length()) {
+                val s = arr.optString(i)
+                val p = s.split(" ").getOrNull(1)?.toFloatOrNull()
+                if (p != null && p > 0) { r.add(p); t = s.substringBefore(' ') }
+            }
+            if (r.size >= 2) return Pair(r, t)
+        } catch (_: Exception) {}
+        if (Mk.market(code) == "CN") {
+            try {
+                val txt = httpGet(
+                    "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_x=/CN_MarketDataService.getKLineData?symbol=$code&scale=5&ma=no&datalen=48",
+                    "https://finance.sina.com.cn/")
+                val i = txt.indexOf('['); val j = txt.lastIndexOf(']')
+                if (i >= 0 && j > i) {
+                    val arr = JSONArray(txt.substring(i, j + 1))
+                    val r = ArrayList<Float>()
+                    var t = ""
+                    for (k in 0 until arr.length()) {
+                        val o = arr.getJSONObject(k)
+                        val c = o.optString("close").toFloatOrNull()
+                        if (c != null && c > 0) {
+                            r.add(c)
+                            t = o.optString("day").substringAfter(' ')
+                        }
+                    }
+                    if (r.size >= 2) return Pair(r, t)
+                }
+            } catch (_: Exception) {}
+        }
+        return null
+    }
+
     /** 新浪美股日K: 完整历史 JSON, 取最近 48 根收盘价 */
     private fun sparkUs(code: String): List<Float>? {
         return try {
@@ -772,6 +817,23 @@ class Store(val ctx: Context) {
         Thread {
             val d = market.fetchSpark(code)
             if (d != null) ui.post { if (currentCode == code) spark = d }
+        }.start()
+    }
+
+    /** 分时曲线 + 数据时间 (详情页每30秒自动刷新) */
+    var minute by mutableStateOf<List<Float>?>(null)
+    var minuteTime by mutableStateOf("")
+
+    fun loadMinuteAsync() {
+        val code = currentCode
+        minute = null
+        Thread {
+            val d = market.fetchMinute(code)
+            ui.post {
+                if (currentCode == code) {
+                    if (d != null) { minute = d.first; minuteTime = d.second }
+                }
+            }
         }.start()
     }
 
@@ -1065,7 +1127,19 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
     val code = store.currentCode
     val q = store.quotes[code]
     val ctx = LocalContext.current
-
+    // 图表模式与自动刷新: 分时每30秒 / 日K每5分钟
+    var chartMode by rememberSaveable { mutableStateOf("min") }
+    LaunchedEffect(code) {
+        store.loadMinuteAsync()
+        store.loadSparkAsync()
+        var n = 0
+        while (true) {
+            kotlinx.coroutines.delay(30_000)
+            n++
+            store.loadMinuteAsync()
+            if (n % 10 == 0) store.loadSparkAsync()
+        }
+    }
     ScreenScaffold(scrollState = listState) { contentPadding ->
         TransformingLazyColumn(
             state = listState,
@@ -1108,9 +1182,34 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     )
                 }
             }
-            item {
-                Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
-                    Modifier.fillMaxWidth().height(54.dp).transformedHeight(this, spec))
+            item(key = "chart") {
+                Column(
+                    Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        MiniChip("分时", color = if (chartMode == "min") cs.primary else cs.onSurfaceVariant) {
+                            chartMode = "min"
+                        }
+                        MiniChip("日K", color = if (chartMode == "day") cs.primary else cs.onSurfaceVariant) {
+                            chartMode = "day"
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    if (chartMode == "min" && store.minute != null) {
+                        MinuteChart(store.minute, q?.prevClose ?: 0.0,
+                            Modifier.fillMaxWidth().height(54.dp))
+                        Text(
+                            if (store.minuteTime.isNotBlank()) "分时 · 数据时间 ${store.minuteTime} · 30秒刷新" else "分时 · 30秒刷新",
+                            fontSize = 9.sp, color = cs.onSurfaceVariant)
+                    } else {
+                        Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
+                            Modifier.fillMaxWidth().height(54.dp))
+                        Text(
+                            if (chartMode == "day") "48日收盘线 · 5分钟刷新" else "分时加载中…",
+                            fontSize = 9.sp, color = cs.onSurfaceVariant)
+                    }
+                }
             }
             item {
                 StackedPane(cs.surfaceContainerHigh, cs.onSurface,
@@ -1201,6 +1300,44 @@ fun Sparkline(data: List<Float>?, up: Boolean, modifier: Modifier) {
             lineTo(size.width, size.height); lineTo(0f, size.height); close()
         }
         drawPath(fill, col.copy(alpha = 0.15f))
+    }
+}
+
+/** 分时曲线: 相对昨收的走势, 昨收虚线基准 + 端点实时圆点 */
+@Composable
+fun MinuteChart(data: List<Float>?, prevClose: Double, modifier: Modifier) {
+    Canvas(modifier) {
+        if (data == null || data.size < 2 || prevClose <= 0) return@Canvas
+        val base = prevClose.toFloat()
+        val mn = minOf(data.min(), base)
+        val mx = maxOf(data.max(), base)
+        val rng = (mx - mn).takeIf { it > 0 } ?: 1f
+        fun y(v: Float) = size.height - 6f - (v - mn) / rng * (size.height - 12f)
+        val col = if (data.last() >= base) Up else Down
+        // 昨收虚线
+        val yb = y(base)
+        drawLine(
+            col.copy(alpha = 0.45f),
+            Offset(0f, yb), Offset(size.width, yb),
+            strokeWidth = 1.5f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))
+        )
+        val path = Path()
+        data.forEachIndexed { i, v ->
+            val x = i.toFloat() / (data.size - 1) * size.width
+            if (i == 0) path.moveTo(x, y(v)) else path.lineTo(x, y(v))
+        }
+        drawPath(path, col, style = Stroke(3f, cap = StrokeCap.Round))
+        val fill = Path().apply {
+            addPath(path)
+            lineTo(size.width, size.height); lineTo(0f, size.height); close()
+        }
+        drawPath(fill, col.copy(alpha = 0.15f))
+        // 最新点
+        drawCircle(
+            col, radius = 4f,
+            center = Offset(size.width, y(data.last()))
+        )
     }
 }
 
