@@ -1,4 +1,4 @@
-package com.tengwear.chaogu
+package com.tengwear.chaoguwang
 
 import android.content.Context
 import android.content.Intent

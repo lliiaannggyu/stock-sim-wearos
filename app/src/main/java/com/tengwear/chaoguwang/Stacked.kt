@@ -1,4 +1,4 @@
-package com.tengwear.chaogu
+package com.tengwear.chaoguwang
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

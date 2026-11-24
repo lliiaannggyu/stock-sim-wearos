@@ -1,4 +1,4 @@
-package com.tengwear.chaogu
+package com.tengwear.chaoguwang
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue

@@ -1,4 +1,4 @@
-package com.tengwear.chaogu
+package com.tengwear.chaoguwang
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -205,7 +205,21 @@ class Quote {
     var limitUp = 0.0; var limitDown = 0.0
     var lot = 0
     var time: String = ""
+    // 大厂行情常用字段
+    var volume = 0.0          // 成交量(手)
+    var amount = 0.0          // 成交额(万)
+    var amplitude = 0.0       // 振幅%
+    var pe = 0.0; var pb = 0.0
+    var floatCap = 0.0        // 流通市值(亿)
+    var volRatio = 0.0        // 量比
+    var avgPrice = 0.0        // 均价
+    var outer = 0.0; var inner = 0.0   // 外盘/内盘(手)
+    val bids = ArrayList<Pair<Double, Int>>()  // 买五档(价格, 手数)
+    val asks = ArrayList<Pair<Double, Int>>()  // 卖五档
 }
+
+class Candle(val date: String, val open: Float, val close: Float,
+             val high: Float, val low: Float, val vol: Float)
 
 class Lot(var date: String, var qty: Int)
 
@@ -268,6 +282,9 @@ class Engine(private val ctx: Context) {
     private val rnd = java.util.Random()
 
     init { acc = load() }
+
+    /** 从磁盘重新读取存档 (导入备份后调用) */
+    fun reload() { acc = load() }
 
     private fun today() = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date())
     private fun now() = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date())
@@ -592,8 +609,20 @@ class Market {
                 q.price = num(f[3]); q.prevClose = num(f[4]); q.open = num(f[5])
                 q.high = num(f[33]); q.low = num(f[34])
                 q.change = num(f[31]); q.changePct = num(f[32])
-                q.turnover = num(f[38]); q.marketCap = num(f[45])
+                q.turnover = num(f.getOrNull(38)); q.marketCap = num(f.getOrNull(45))
                 q.time = f[30]
+                // 扩展字段 (腾讯字段位, 各市场可能缺失, 缺失补0)
+                q.volume = num(f.getOrNull(36)); q.amount = num(f.getOrNull(37))
+                q.amplitude = num(f.getOrNull(43)); q.pe = num(f.getOrNull(39))
+                q.pb = num(f.getOrNull(46)); q.floatCap = num(f.getOrNull(44))
+                q.volRatio = num(f.getOrNull(49)); q.avgPrice = num(f.getOrNull(51))
+                q.outer = num(f.getOrNull(7)); q.inner = num(f.getOrNull(8))
+                for (k in 0 until 5) {
+                    val bp = num(f.getOrNull(9 + k * 2)); val bv = num(f.getOrNull(10 + k * 2)).toInt()
+                    val ap = num(f.getOrNull(19 + k * 2)); val av = num(f.getOrNull(20 + k * 2)).toInt()
+                    if (bp > 0) q.bids.add(bp to bv)
+                    if (ap > 0) q.asks.add(ap to av)
+                }
                 when (Mk.market(code)) {
                     "HK" -> { q.lot = f.getOrNull(60)?.toDoubleOrNull()?.toInt() ?: 0 }
                     "CN" -> { q.lot = 100; q.limitUp = num(f[47]); q.limitDown = num(f[48]) }
@@ -605,7 +634,7 @@ class Market {
         return out
     }
 
-    private fun num(s: String) = s.toDoubleOrNull() ?: 0.0
+    private fun num(s: String?) = s?.toDoubleOrNull() ?: 0.0
 
     /** 日K收盘价序列: A股/港股走腾讯 ifzq, 美股走新浪(腾讯对美股只返回2根K线导致曲线为直线) */
     fun fetchSpark(code: String): List<Float>? =
@@ -703,6 +732,46 @@ class Market {
         } catch (_: Exception) { null }
     }
 
+    /** 48根日K线(开/收/高/低/量), 用于蜡烛图 */
+    fun fetchCandles(code: String): List<Candle>? {
+        return try {
+        val r = ArrayList<Candle>()
+        if (Mk.market(code) == "US") {
+            val txt = httpGet(
+                "https://stock.finance.sina.com.cn/usstock/api/jsonp_v2.php/var%20_x=/US_MinKService.getDailyK?symbol=${code.substring(2)}",
+                "https://finance.sina.com.cn/")
+            val i = txt.indexOf('['); val j = txt.lastIndexOf(']')
+            if (i < 0 || j <= i) return null
+            val arr = JSONArray(txt.substring(i, j + 1))
+            val st = max(0, arr.length() - 48)
+            for (k in st until arr.length()) {
+                val o = arr.getJSONObject(k)
+                val c = Candle(
+                    o.optString("d"), o.optString("o").toFloatOrNull() ?: 0f,
+                    o.optString("c").toFloatOrNull() ?: 0f, o.optString("h").toFloatOrNull() ?: 0f,
+                    o.optString("l").toFloatOrNull() ?: 0f, o.optString("v").toFloatOrNull() ?: 0f)
+                if (c.close > 0) r.add(c)
+            }
+        } else {
+            val txt = httpGet(
+                "https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param=$code,day,,,48",
+                "https://gu.qq.com/")
+            val node = JSONObject(txt).getJSONObject("data").getJSONObject(code)
+            val arr = node.optJSONArray("day") ?: node.optJSONArray("qfqday") ?: return null
+            val st = max(0, arr.length() - 48)
+            for (k in st until arr.length()) {
+                val row = arr.getJSONArray(k)
+                val c = Candle(
+                    row.optString(0), row.optString(1).toFloatOrNull() ?: 0f,
+                    row.optString(2).toFloatOrNull() ?: 0f, row.optString(3).toFloatOrNull() ?: 0f,
+                    row.optString(4).toFloatOrNull() ?: 0f, row.optString(5).toFloatOrNull() ?: 0f)
+                if (c.close > 0) r.add(c)
+            }
+        }
+        if (r.size >= 2) r else null
+        } catch (_: Exception) { null }
+    }
+
     fun search(kw: String): List<Quote> {
         val r = ArrayList<Quote>()
         try {
@@ -748,6 +817,7 @@ class Store(val ctx: Context) {
     val searchResults = mutableStateListOf<Quote>()
     var curChapter by mutableStateOf(0)
     var playDays by mutableStateOf(0)   // 游玩天数(从0开始, 按自然日递增)
+    var migrationMsg by mutableStateOf("")  // 换包迁移状态
 
     var watch: MutableList<String> = mutableListOf(
         "sh600519", "sz300750", "hk00700", "usAAPL", "sh510300", "sz000001")
@@ -793,6 +863,7 @@ class Store(val ctx: Context) {
     fun allCodes(): List<String> {
         val s = LinkedHashSet<String>()
         s.add("sh000001"); s.add("sz399001"); s.add("sz399006")
+        s.add("hkHSI"); s.add("usDJI")
         s.addAll(watch); s.add(currentCode)
         s.addAll(engine.acc.positions.keys)
         return s.toList()
@@ -822,12 +893,78 @@ class Store(val ctx: Context) {
         }.start()
     }
 
+    /** 导出完整存档为 Base64 文本 (换包/换设备时复制走即可恢复) */
+    fun exportBackup(): String {
+        val root = JSONObject()
+        val f = File(ctx.filesDir, "account.json")
+        root.put("account", if (f.exists()) f.readText(Charsets.UTF_8) else "")
+        val p = JSONObject()
+        for ((k, v) in prefs.all) when (v) {
+            is String -> p.put(k, v); is Int -> p.put(k, v)
+            is Long -> p.put(k, v); is Float -> p.put(k, v)
+            is Boolean -> p.put(k, v)
+        }
+        root.put("prefs", p)
+        root.put("exportAt", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date()))
+        return android.util.Base64.encodeToString(
+            root.toString().toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+    }
+
+    /** 从 Base64 文本恢复存档; 成功返回 null */
+    fun importBackup(text: String): String? {
+        return try {
+            val raw = String(android.util.Base64.decode(text.trim(), android.util.Base64.NO_WRAP), Charsets.UTF_8)
+            val root = JSONObject(raw)
+            val acc = root.optString("account")
+            val prefObj = root.optJSONObject("prefs")
+            if (acc.isBlank()) return "备份中没有账户数据"
+            JSONObject(acc) // 校验 JSON 合法
+            val tmp = File(ctx.filesDir, "account.json.tmp")
+            tmp.writeText(acc, Charsets.UTF_8)
+            val dest = File(ctx.filesDir, "account.json")
+            if (dest.exists()) dest.renameTo(File(ctx.filesDir, "account.json.bak"))
+            tmp.renameTo(dest)
+            if (prefObj != null) {
+                val ed = prefs.edit()
+                val it = prefObj.keys()
+                while (it.hasNext()) {
+                    val k = it.next(); val v = prefObj.get(k)
+                    when (v) {
+                        is String -> ed.putString(k, v)
+                        is Int -> ed.putInt(k, v)
+                        is Long -> ed.putLong(k, v)
+                        is Float -> ed.putFloat(k, v)
+                        is Boolean -> ed.putBoolean(k, v)
+                    }
+                }
+                ed.apply()
+            }
+            engine.reload()
+            watch = (prefs.getString("watch", null) ?: watch.joinToString(","))
+                .split(",").filter { it.isNotBlank() }.toMutableList()
+            migrationMsg = "已从备份恢复"
+            tick++
+            null
+        } catch (e: Exception) { "恢复失败: ${e.message}" }
+    }
+
     fun loadSparkAsync() {
         val code = currentCode
         spark = null
         Thread {
             val d = market.fetchSpark(code)
             if (d != null) ui.post { if (currentCode == code) spark = d }
+        }.start()
+    }
+
+    /** 日K蜡烛数据 (详情页切到日K时按需加载) */
+    var candles by mutableStateOf<List<Candle>?>(null)
+
+    fun loadCandlesAsync() {
+        val code = currentCode
+        Thread {
+            val d = market.fetchCandles(code)
+            ui.post { if (currentCode == code) candles = d }
         }.start()
     }
 
@@ -870,27 +1007,38 @@ class Store(val ctx: Context) {
 
 /* ================= Activity ================= */
 
-/** 包名变更 (com.tengwear.chaogu 前身为 com.workbuddy.stocksim): 首次安装自动迁移旧存档 */
-fun migrateOldData(ctx: Context) {
-    try {
-        val dest = File(ctx.filesDir, "account.json")
-        if (dest.exists()) return
-        val old = ctx.createPackageContext("com.workbuddy.stocksim", Context.CONTEXT_IGNORE_SECURITY)
-        val src = File(old.filesDir, "account.json")
-        if (src.exists()) src.copyTo(dest, overwrite = true)
-        val sp = old.getSharedPreferences("sim", Context.MODE_PRIVATE).all
-        if (sp.isNotEmpty()) {
-            val ed = ctx.getSharedPreferences("sim", Context.MODE_PRIVATE).edit()
-            for ((k, v) in sp) when (v) {
-                is String -> ed.putString(k, v)
-                is Int -> ed.putInt(k, v)
-                is Long -> ed.putLong(k, v)
-                is Float -> ed.putFloat(k, v)
-                is Boolean -> ed.putBoolean(k, v)
+/** 历史包名链: 换包名时依次尝试, 把旧存档搬进新包 (需同签名) */
+private val OLD_PACKAGES = listOf(
+    "com.tengwear.chaogu",       // v2.4~v2.5
+    "com.workbuddy.stocksim"     // v1~v2.3
+)
+
+/** 首次安装自动迁移旧存档, 返回状态供"版本信息"页显示 */
+fun migrateOldData(ctx: Context): String {
+    val dest = File(ctx.filesDir, "account.json")
+    if (dest.exists()) return "已有存档，无需迁移"
+    for (pkg in OLD_PACKAGES) {
+        try {
+            val old = ctx.createPackageContext(pkg, Context.CONTEXT_IGNORE_SECURITY)
+            val src = File(old.filesDir, "account.json")
+            if (!src.exists()) continue
+            src.copyTo(dest, overwrite = true)
+            val sp = old.getSharedPreferences("sim", Context.MODE_PRIVATE).all
+            if (sp.isNotEmpty()) {
+                val ed = ctx.getSharedPreferences("sim", Context.MODE_PRIVATE).edit()
+                for ((k, v) in sp) when (v) {
+                    is String -> ed.putString(k, v)
+                    is Int -> ed.putInt(k, v)
+                    is Long -> ed.putLong(k, v)
+                    is Float -> ed.putFloat(k, v)
+                    is Boolean -> ed.putBoolean(k, v)
+                }
+                ed.apply()
             }
-            ed.apply()
-        }
-    } catch (_: Exception) {}
+            return "已从 $pkg 迁移存档"
+        } catch (_: Exception) {}
+    }
+    return "新存档（未找到旧版）"
 }
 
 class MainActivity : ComponentActivity() {
@@ -899,8 +1047,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
-        migrateOldData(applicationContext)
+        CrashGuard.install(applicationContext)
+        val migrationMsg = migrateOldData(applicationContext)
         val store = Store(applicationContext)
+        store.migrationMsg = migrationMsg
         setContent { WearApp(store) }
         loopQuotes(store)
         loopMatch(store)
@@ -931,6 +1081,7 @@ fun WearApp(store: Store) {
         Box(Modifier.fillMaxSize()) {
             SwipeDismissableNavHost(navController, startDestination = "watchlist") {
                 composable("watchlist") { WatchlistScreen(store, navController) }
+                composable("market") { MarketScreen(store, navController) }
                 composable("detail") { DetailScreen(store, navController) }
                 composable("trade") { TradeScreen(store, navController) }
                 composable("positions") { PositionsScreen(store, navController) }
@@ -1110,6 +1261,21 @@ fun WatchlistScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     }
                 )
             }
+            item(key = "market_entry") {
+                BarCapsule(
+                    containerColor = cs.surfaceContainerHigh,
+                    contentColor = cs.onSurface,
+                    secondaryContentColor = cs.onSurfaceVariant,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = { buzz(ctx); nav.navigate("market") },
+                    leading = {
+                        Icon(Icons.Filled.KeyboardArrowUp, contentDescription = null,
+                            tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                    },
+                    label = { Text("市场总览", fontSize = 13.sp) },
+                    secondaryLabel = { Text("指数 · 涨跌榜 · 成交额", fontSize = 10.sp) }
+                )
+            }
             item(key = "manage_entry") {
                 BarCapsule(
                     containerColor = cs.surfaceContainerHigh,
@@ -1123,6 +1289,95 @@ fun WatchlistScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     },
                     label = { Text("搜索 / 管理自选", fontSize = 13.sp) },
                     secondaryLabel = { Text("A股 · 港股 · 美股 · ETF", fontSize = 10.sp) }
+                )
+            }
+        }
+    }
+}
+
+/* ---- 市场总览: 指数 + 自选涨跌排行 ---- */
+@Composable
+fun MarketScreen(store: Store, nav: androidx.navigation.NavHostController) {
+    val listState = rememberTransformingLazyColumnState()
+    val spec = rememberTransformationSpec()
+    val cs = MaterialTheme.colorScheme
+    val ctx = LocalContext.current
+    @Suppress("UNUSED_VARIABLE") val t = store.tick
+    val indices = listOf(
+        "sh000001" to "上证指数", "sz399001" to "深证成指",
+        "sz399006" to "创业板指", "hkHSI" to "恒生指数", "usDJI" to "道琼斯")
+    val ranked = store.watch.mapNotNull { code ->
+        store.quotes[code]?.let { code to it }
+    }.sortedByDescending { it.second.changePct }
+
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) { Text("市场总览") }
+            }
+            items(indices, key = { it.first }) { (code, name) ->
+                val q = store.quotes[code]
+                BarCapsule(
+                    containerColor = cs.surfaceContainerHigh,
+                    contentColor = cs.onSurface,
+                    secondaryContentColor = cs.onSurfaceVariant,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = {
+                        buzz(ctx); store.currentCode = code
+                        store.loadMinuteAsync(); store.loadCandlesAsync()
+                        nav.navigate("detail")
+                    },
+                    leading = { MarketBadge(code) },
+                    label = { Text(name, fontSize = 13.sp, maxLines = 1) },
+                    secondaryLabel = {
+                        Text(q?.let { "成交额 ${shortNum(it.amount)}万" } ?: "加载中…", fontSize = 10.sp)
+                    },
+                    trailing = {
+                        Text(q?.let { signed(it.changePct) + "%" } ?: "—", fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = upDownColor(q?.changePct ?: 0.0))
+                    }
+                )
+            }
+            item {
+                ListHeader(
+                    modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec)
+                ) { Text("自选涨跌榜", fontSize = 12.sp) }
+            }
+            if (ranked.isEmpty()) {
+                item {
+                    Text("行情加载中…", fontSize = 11.sp, color = cs.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+                        textAlign = TextAlign.Center)
+                }
+            }
+            items(ranked, key = { it.first }) { (code, q) ->
+                BarCapsule(
+                    containerColor = cs.surfaceContainerHigh,
+                    contentColor = cs.onSurface,
+                    secondaryContentColor = cs.onSurfaceVariant,
+                    modifier = Modifier.transformedHeight(this, spec),
+                    onClick = {
+                        buzz(ctx); store.currentCode = code
+                        store.loadMinuteAsync(); store.loadCandlesAsync()
+                        nav.navigate("detail")
+                    },
+                    leading = { MarketBadge(code) },
+                    label = { Text(q.name, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    secondaryLabel = { Text(Mk.sym(code) + f2(q.price), fontSize = 10.sp) },
+                    trailing = {
+                        Text(signed(q.changePct) + "%", fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium, color = upDownColor(q.changePct))
+                    }
                 )
             }
         }
@@ -1166,15 +1421,16 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
     // 图表模式与自动刷新: 分时每30秒 / 日K每5分钟
     var chartMode by rememberSaveable { mutableStateOf("min") }
     LaunchedEffect(code) {
-        store.loadMinuteAsync()
-        store.loadSparkAsync()
-        var n = 0
-        while (true) {
-            kotlinx.coroutines.delay(30_000)
-            n++
             store.loadMinuteAsync()
-            if (n % 10 == 0) store.loadSparkAsync()
-        }
+            store.loadSparkAsync()
+            store.loadCandlesAsync()
+            var n = 0
+            while (true) {
+                kotlinx.coroutines.delay(30_000)
+                n++
+                store.loadMinuteAsync()
+                if (n % 10 == 0) { store.loadSparkAsync(); store.loadCandlesAsync() }
+            }
     }
     ScreenScaffold(scrollState = listState) { contentPadding ->
         TransformingLazyColumn(
@@ -1228,7 +1484,7 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                             chartMode = "min"
                         }
                         MiniChip("日K", color = if (chartMode == "day") cs.primary else cs.onSurfaceVariant) {
-                            chartMode = "day"
+                            chartMode = "day"; store.loadCandlesAsync()
                         }
                     }
                     Spacer(Modifier.height(4.dp))
@@ -1239,11 +1495,16 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                             if (store.minuteTime.isNotBlank()) "分时量 · ${store.minuteTime} · 30秒刷新" else "分时 · 30秒刷新",
                             fontSize = 9.sp, color = cs.onSurfaceVariant)
                     } else {
-                        Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
-                            Modifier.fillMaxWidth().height(54.dp))
-                        Text(
-                            if (chartMode == "day") "48日收盘线 · 5分钟刷新" else "分时加载中…",
-                            fontSize = 9.sp, color = cs.onSurfaceVariant)
+                        if (chartMode == "day" && store.candles != null) {
+                            CandleChart(store.candles, Modifier.fillMaxWidth().height(72.dp))
+                            Text("48日K线 · 5分钟刷新", fontSize = 9.sp, color = cs.onSurfaceVariant)
+                        } else {
+                            Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
+                                Modifier.fillMaxWidth().height(72.dp))
+                            Text(
+                                if (chartMode == "day") "日K加载中…" else "分时加载中…",
+                                fontSize = 9.sp, color = cs.onSurfaceVariant)
+                        }
                     }
                 }
             }
@@ -1271,6 +1532,67 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                                     Row(Modifier.width(118.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                                         Text(k, fontSize = 11.sp, color = cs.onSurfaceVariant)
                                         Text(v, fontSize = 11.sp, color = cs.onSurface)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (q != null && (q.bids.isNotEmpty() || q.asks.isNotEmpty())) {
+                item(key = "orderbook") {
+                    StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                        modifier = Modifier.transformedHeight(this, spec)) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Text("五档盘口 · 手", fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                                color = cs.primary, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(4.dp))
+                            // 卖五 -> 卖一 (倒序)
+                            for (i in q.asks.indices.reversed()) {
+                                val a = q.asks[i]
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("卖${i + 1}", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                    Text(f2(a.first), fontSize = 11.sp, color = Down)
+                                    Text("${a.second}", fontSize = 10.sp, color = cs.onSurface)
+                                }
+                            }
+                            Spacer(Modifier.height(3.dp))
+                            Text("── ${Mk.sym(code)}${f2(q.price)} ──", fontSize = 10.sp,
+                                color = cs.onSurface, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(3.dp))
+                            for (i in q.bids.indices) {
+                                val b = q.bids[i]
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("买${i + 1}", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                    Text(f2(b.first), fontSize = 11.sp, color = Up)
+                                    Text("${b.second}", fontSize = 10.sp, color = cs.onSurface)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (q != null && (q.volRatio > 0 || q.pe > 0 || q.amplitude > 0)) {
+                item(key = "metrics") {
+                    StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                        modifier = Modifier.transformedHeight(this, spec)) {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            val more = mutableListOf(
+                                "量比" to (if (q.volRatio > 0) f2(q.volRatio) else "—"),
+                                "振幅" to (if (q.amplitude > 0) f2(q.amplitude) + "%" else "—"),
+                                "均价" to (if (q.avgPrice > 0) f2(q.avgPrice) else "—"),
+                                "市盈" to (if (q.pe > 0) f2(q.pe) else "—"),
+                                "市净" to (if (q.pb > 0) f2(q.pb) else "—"),
+                                "流通市值" to (if (q.floatCap > 0) f2(q.floatCap, 0) + "亿" else "—"),
+                                "成交额" to (if (q.amount > 0) shortNum(q.amount) + "万" else "—"),
+                                "内外盘" to (if (q.outer + q.inner > 0) "${shortNum(q.outer)}/${shortNum(q.inner)}" else "—"))
+                            for (chunk in more.chunked(2)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    for ((k, v) in chunk) {
+                                        Row(Modifier.width(118.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text(k, fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                            Text(v, fontSize = 10.sp, color = cs.onSurface)
+                                        }
                                     }
                                 }
                             }
@@ -1388,6 +1710,41 @@ fun MinuteChart(data: List<Float>?, vols: List<Float>?, prevClose: Double, modif
                 )
             }
         }
+    }
+}
+
+/** 日K蜡烛图: 红涨绿跌 + 下方成交量 */
+@Composable
+fun CandleChart(data: List<Candle>?, modifier: Modifier) {
+    Canvas(modifier) {
+        if (data.isNullOrEmpty()) return@Canvas
+        val volH = size.height * 0.26f
+        val priceH = size.height - volH
+        val hi = data.maxOf { it.high }; val lo = data.minOf { it.low }
+        val rng = (hi - lo).takeIf { it > 0 } ?: 1f
+        fun y(v: Float) = priceH - 4f - (v - lo) / rng * (priceH - 10f)
+        val slot = size.width / data.size
+        val bw = (slot * 0.62f).coerceAtLeast(1.5f)
+        val maxVol = data.maxOf { it.vol }.takeIf { it > 0 } ?: 1f
+        data.forEachIndexed { i, c ->
+            val cx = i * slot + slot / 2
+            val up = c.close >= c.open
+            val col = if (up) Up else Down
+            // 影线
+            drawLine(col, Offset(cx, y(c.high)), Offset(cx, y(c.low)), strokeWidth = 1f)
+            // 实体
+            val top = y(maxOf(c.open, c.close)); val bot = y(minOf(c.open, c.close))
+            drawRect(col, Offset(cx - bw / 2, top), androidx.compose.ui.geometry.Size(bw, (bot - top).coerceAtLeast(1.5f)))
+            // 量柱
+            val vh = c.vol / maxVol * (volH - 4f)
+            drawRect(col.copy(alpha = 0.55f), Offset(cx - bw / 2, size.height - vh),
+                androidx.compose.ui.geometry.Size(bw, vh))
+        }
+        // 最新价虚线
+        drawLine(
+            Up.copy(alpha = 0.5f), Offset(0f, y(data.last().close)),
+            Offset(size.width, y(data.last().close)), strokeWidth = 1f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f)))
     }
 }
 
@@ -1619,6 +1976,38 @@ fun PositionsScreen(store: Store, nav: androidx.navigation.NavHostController) {
                             textAlign = TextAlign.Center)
                         Text("实时汇率 1USD=¥${f2(Fx.rate("USD"), 3)} · 1HKD=¥${f2(Fx.rate("HKD"), 4)}",
                             fontSize = 9.sp, color = cs.onSurfaceVariant)
+                    }
+                }
+            }
+            item(key = "allocation") {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(Modifier.fillMaxWidth()) {
+                        val mvCny = acc.positions.values.sumOf { (store.quotes[it.code]?.price ?: 0.0) * it.qty * Mk.fx(it.cur) }
+                        val cashCny = Account.CURS.sumOf { (acc.cash[it] ?: 0.0) * Mk.fx(it) }
+                        val cashPct = if (total > 0) cashCny / total else 0.0
+                        Text("资产分布", fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                            color = cs.primary, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                        Spacer(Modifier.height(5.dp))
+                        Row(Modifier.fillMaxWidth().height(10.dp).clip(BarCapsuleShape)) {
+                            Box(Modifier.weight(cashPct.toFloat().coerceAtLeast(0.001f)).background(cs.primary))
+                            Box(Modifier.weight((1 - cashPct).toFloat().coerceAtLeast(0.001f)).background(cs.tertiary))
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text("现金 ${f2(cashPct * 100, 0)}% · 持仓 ${f2((1 - cashPct) * 100, 0)}% ¥${shortNum(mvCny)}",
+                            fontSize = 10.sp, color = cs.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                        Spacer(Modifier.height(6.dp))
+                        val closed = acc.trades.count { !it.pnl.isNaN() }
+                        val wins = acc.trades.count { it.pnl > 0 }
+                        val realized = Account.CURS.sumOf { (acc.realizedPnl[it] ?: 0.0) * Mk.fx(it) }
+                        Text(
+                            "成交 ${acc.trades.size} 笔 · 胜率 ${if (closed > 0) f2(wins * 100.0 / closed, 0) else "—"}%",
+                            fontSize = 11.sp, color = cs.onSurface,
+                            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                        Text("已实现盈亏 ${signed(realized, 0)}", fontSize = 11.sp,
+                            color = upDownColor(realized),
+                            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     }
                 }
             }
@@ -1870,6 +2259,52 @@ fun ManageScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     label = { Text("搜索全市场添加自选", fontSize = 13.sp) },
                     secondaryLabel = { Text("名称 / 代码 / 拼音", fontSize = 10.sp) }
                 )
+            }
+            item(key = "version") {
+                StackedPane(cs.surfaceContainerHigh, cs.onSurface,
+                    modifier = Modifier.transformedHeight(this, spec)) {
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        val pi = try { ctx.packageManager.getPackageInfo(ctx.packageName, 0) } catch (_: Exception) { null }
+                        val vc = pi?.let { if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode else it.versionCode.toLong() }
+                        Text("版本信息", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = cs.primary)
+                        Spacer(Modifier.height(4.dp))
+                        Text("v${pi?.versionName ?: "?"} (build ${vc ?: "?"})", fontSize = 12.sp, color = cs.onSurface)
+                        Text(ctx.packageName, fontSize = 8.sp, color = cs.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(store.migrationMsg, fontSize = 9.sp, color = cs.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            MiniChip("导出备份") {
+                                buzz(ctx)
+                                val bk = store.exportBackup()
+                                try {
+                                    @Suppress("DEPRECATION")
+                                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("chaogu-backup", bk))
+                                    store.toast("备份已复制 (${bk.length}字符)")
+                                } catch (_: Exception) { store.toast("复制失败") }
+                            }
+                            MiniChip("导入备份") {
+                                buzz(ctx)
+                                if (activity == null) return@MiniChip
+                                val input = EditText(activity)
+                                input.hint = "粘贴备份文本"
+                                input.setPadding(32, 24, 32, 24)
+                                AlertDialog.Builder(activity)
+                                    .setTitle("从备份恢复存档")
+                                    .setMessage("将覆盖当前资金/持仓/自选, 请先导出当前备份")
+                                    .setView(input)
+                                    .setPositiveButton("恢复") { _, _ ->
+                                        val err = store.importBackup(input.text.toString())
+                                        if (err == null) store.toast("✓ 存档已恢复") else store.toast(err)
+                                    }
+                                    .setNegativeButton("取消", null)
+                                    .show()
+                            }
+                        }
+                    }
+                }
             }
             item(key = "theme") {
                 StackedPane(cs.surfaceContainerHigh, cs.onSurface,
