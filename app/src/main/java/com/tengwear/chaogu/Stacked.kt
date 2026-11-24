@@ -1,4 +1,4 @@
-package com.workbuddy.stocksim
+package com.tengwear.chaogu
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

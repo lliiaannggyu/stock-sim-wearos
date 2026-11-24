@@ -1,4 +1,4 @@
-package com.workbuddy.stocksim
+package com.tengwear.chaogu
 
 import android.app.Activity
 import android.app.AlertDialog
