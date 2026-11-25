@@ -822,6 +822,13 @@ class Store(val ctx: Context) {
     var migrationMsg by mutableStateOf("")  // 换包迁移状态
     var chartFullscreen by mutableStateOf(false)   // 图表全屏查看模式
     var chartFullMode by mutableStateOf("min")     // 全屏模式下的图表类型: min / day
+    var removeCandidate by mutableStateOf<String?>(null)  // 长按待删除的自选代码
+    var removeStep by mutableStateOf(0)   // 删除自选二级确认: 0无 1首确认 2再确认
+    fun clearRemove() { removeCandidate = null; removeStep = 0 }
+    fun confirmRemove() {
+        removeCandidate?.let { if (watch.contains(it)) removeWatch(it) }
+        clearRemove()
+    }
 
     var watch: MutableList<String> = mutableListOf(
         "sh600519", "sz300750", "hk00700", "usAAPL", "sh510300", "sz000001")
@@ -1050,7 +1057,10 @@ class MainActivity : ComponentActivity() {
     private var running = true
 
     override fun onCreate(b: Bundle?) {
+        // 双保险: 非 WearOS 设备上去掉系统 ActionBar/标题栏 (必须在 super 之前)
+        requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         super.onCreate(b)
+        try { actionBar?.hide() } catch (_: Exception) {}
         CrashGuard.install(applicationContext)
         val migrationMsg = migrateOldData(applicationContext)
         val store = Store(applicationContext)
@@ -1097,6 +1107,7 @@ fun WearApp(store: Store) {
             }
             ConfirmOverlay(store)
             ChartFullscreenOverlay(store)
+            RemoveWatchOverlay(store)
             ToastBar(store)
         }
     }
@@ -1238,6 +1249,9 @@ fun WatchlistScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     onClick = {
                         buzz(ctx); store.currentCode = code; store.loadSparkAsync()
                         nav.navigate("detail")
+                    },
+                    onLongClick = {
+                        buzz(ctx, 30); store.removeCandidate = code; store.removeStep = 1
                     },
                     leading = { MarketBadge(code) },
                     label = {
@@ -2619,6 +2633,62 @@ fun ExchangeScreen(store: Store, nav: androidx.navigation.NavHostController) {
                         store.toast("✓ 已换汇 ${symOf(to)}${f2(recv)}")
                         store.tick++
                     } else store.toast(err)
+                }
+            }
+        }
+    }
+}
+
+/* ---- 长按移除自选 (二级确认, 不影响持仓) ---- */
+@Composable
+fun RemoveWatchOverlay(store: Store) {
+    val code = store.removeCandidate ?: return
+    val cs = MaterialTheme.colorScheme
+    val q = store.quotes[code]
+    Box(
+        Modifier.fillMaxSize().background(Color(0xE0000000)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .clip(BarCapsuleShape)
+                .background(cs.surfaceContainerHigh)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("移除自选股？", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
+            Text(
+                (q?.name ?: code) + "  " + code,
+                fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 1)
+            Text(
+                if (store.removeStep == 1) "仅从自选列表移除，已持有的股份不受影响"
+                else "再次确认：确实要移除吗？",
+                fontSize = 10.sp, color = cs.onSurfaceVariant,
+                textAlign = TextAlign.Center)
+            Spacer(Modifier.height(2.dp))
+            // 第一级: 取消 / 继续; 第二级: 取消 / 确认移除
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(Modifier.weight(1f)) {
+                    ActionCapsule("取消", cs.surfaceContainer, cs.onSurface) {
+                        buzz(store.ctx); store.clearRemove()
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    if (store.removeStep == 1) {
+                        ActionCapsule("下一步", cs.primary, cs.onPrimary) {
+                            buzz(store.ctx); store.removeStep = 2
+                        }
+                    } else {
+                        ActionCapsule("确认移除", Color(0xFFB3261E), Color.White) {
+                            buzz(store.ctx, 30); store.confirmRemove(); store.toast("已移出自选")
+                        }
+                    }
                 }
             }
         }

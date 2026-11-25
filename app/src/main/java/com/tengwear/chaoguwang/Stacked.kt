@@ -2,6 +2,8 @@ package com.tengwear.chaoguwang
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -97,6 +99,7 @@ val BarCapsuleHeight = 52.dp
  *
  * 内部自动叠一层 [stackedShadow]：只有"往上滚、被上方叠住"的行卡浮起投影。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TransformingLazyColumnItemScope.BarCapsule(
     containerColor: Color,
@@ -104,13 +107,14 @@ fun TransformingLazyColumnItemScope.BarCapsule(
     modifier: Modifier = Modifier,
     secondaryContentColor: Color = contentColor,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     leading: (@Composable () -> Unit)? = null,
     label: @Composable () -> Unit,
     secondaryLabel: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null
 ) {
-    val clickModifier = if (onClick != null) {
-        Modifier.clickable(onClick = onClick)
+    val clickModifier = if (onClick != null || onLongClick != null) {
+        Modifier.combinedClickable(onClick = onClick ?: {}, onLongClick = onLongClick)
     } else {
         Modifier
     }

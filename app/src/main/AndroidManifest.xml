@@ -12,7 +12,7 @@
     <application
         android:label="模拟炒股"
         android:icon="@mipmap/ic_launcher"
-        android:theme="@android:style/Theme.DeviceDefault">
+        android:theme="@style/AppTheme">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -26,7 +26,7 @@
         <activity
             android:name=".CrashActivity"
             android:exported="false"
-            android:theme="@android:style/Theme.DeviceDefault"/>
+            android:theme="@style/AppTheme"/>
 
         <!-- 低端/无GMS手表上 EmojiCompat 字体初始化是常见闪退源, 移除 -->
         <provider
