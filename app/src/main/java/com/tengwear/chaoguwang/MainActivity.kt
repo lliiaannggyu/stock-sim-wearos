@@ -15,6 +15,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -818,6 +820,8 @@ class Store(val ctx: Context) {
     var curChapter by mutableStateOf(0)
     var playDays by mutableStateOf(0)   // 游玩天数(从0开始, 按自然日递增)
     var migrationMsg by mutableStateOf("")  // 换包迁移状态
+    var chartFullscreen by mutableStateOf(false)   // 图表全屏查看模式
+    var chartFullMode by mutableStateOf("min")     // 全屏模式下的图表类型: min / day
 
     var watch: MutableList<String> = mutableListOf(
         "sh600519", "sz300750", "hk00700", "usAAPL", "sh510300", "sz000001")
@@ -1092,6 +1096,7 @@ fun WearApp(store: Store) {
                 composable("fx") { ExchangeScreen(store, navController) }
             }
             ConfirmOverlay(store)
+            ChartFullscreenOverlay(store)
             ToastBar(store)
         }
     }
@@ -1488,24 +1493,37 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    if (chartMode == "min" && store.minute != null) {
-                        MinuteChart(store.minute, store.minuteVol, q?.prevClose ?: 0.0,
-                            Modifier.fillMaxWidth().height(72.dp))
-                        Text(
-                            if (store.minuteTime.isNotBlank()) "分时量 · ${store.minuteTime} · 30秒刷新" else "分时 · 30秒刷新",
-                            fontSize = 9.sp, color = cs.onSurfaceVariant)
-                    } else {
-                        if (chartMode == "day" && store.candles != null) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(76.dp)
+                            .pointerInput(Unit) {
+                                detectTapGestures(onDoubleTap = {
+                                    buzz(ctx)
+                                    store.chartFullMode = chartMode
+                                    store.chartFullscreen = true
+                                })
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (chartMode == "min" && store.minute != null) {
+                            MinuteChart(store.minute, store.minuteVol, q?.prevClose ?: 0.0,
+                                Modifier.fillMaxWidth().height(72.dp))
+                        } else if (chartMode == "day" && store.candles != null) {
                             CandleChart(store.candles, Modifier.fillMaxWidth().height(72.dp))
-                            Text("48日K线 · 5分钟刷新", fontSize = 9.sp, color = cs.onSurfaceVariant)
                         } else {
                             Sparkline(store.spark, (q?.changePct ?: 0.0) >= 0,
                                 Modifier.fillMaxWidth().height(72.dp))
-                            Text(
-                                if (chartMode == "day") "日K加载中…" else "分时加载中…",
-                                fontSize = 9.sp, color = cs.onSurfaceVariant)
                         }
                     }
+                    Text(
+                        when {
+                            chartMode == "min" && store.minuteTime.isNotBlank() ->
+                                "双击放大 · ${store.minuteTime}"
+                            chartMode == "min" -> "双击放大 · 分时"
+                            else -> "双击放大 · 48日K"
+                        },
+                        fontSize = 9.sp, color = cs.onSurfaceVariant)
                 }
             }
             item {
@@ -1527,11 +1545,15 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                             rows.add("跌停" to (q?.let { f2(it.limitDown) } ?: "—"))
                         }
                         for (chunk in rows.chunked(2)) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 for ((k, v) in chunk) {
-                                    Row(Modifier.width(118.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text(k, fontSize = 11.sp, color = cs.onSurfaceVariant)
-                                        Text(v, fontSize = 11.sp, color = cs.onSurface)
+                                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(k, fontSize = 11.sp, color = cs.onSurfaceVariant,
+                                            maxLines = 1, softWrap = false)
+                                        Text(v, fontSize = 11.sp, color = cs.onSurface,
+                                            maxLines = 1, softWrap = false,
+                                            overflow = TextOverflow.Clip,
+                                            modifier = Modifier.padding(start = 2.dp))
                                     }
                                 }
                             }
@@ -1587,11 +1609,15 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                                 "成交额" to (if (q.amount > 0) shortNum(q.amount) + "万" else "—"),
                                 "内外盘" to (if (q.outer + q.inner > 0) "${shortNum(q.outer)}/${shortNum(q.inner)}" else "—"))
                             for (chunk in more.chunked(2)) {
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     for ((k, v) in chunk) {
-                                        Row(Modifier.width(118.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text(k, fontSize = 10.sp, color = cs.onSurfaceVariant)
-                                            Text(v, fontSize = 10.sp, color = cs.onSurface)
+                                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text(k, fontSize = 10.sp, color = cs.onSurfaceVariant,
+                                                maxLines = 1, softWrap = false)
+                                            Text(v, fontSize = 10.sp, color = cs.onSurface,
+                                                maxLines = 1, softWrap = false,
+                                                overflow = TextOverflow.Clip,
+                                                modifier = Modifier.padding(start = 2.dp))
                                         }
                                     }
                                 }
@@ -1814,7 +1840,8 @@ fun TradeScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     modifier = Modifier.transformedHeight(this, spec)) {
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("价格 ($curName)", fontSize = 10.sp, color = cs.onSurfaceVariant)
-                        Text(f2(store.trPrice), fontSize = 26.sp, fontWeight = FontWeight.Medium)
+                        Text(f2(store.trPrice), fontSize = 26.sp, fontWeight = FontWeight.Medium,
+                            maxLines = 1, softWrap = false)
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             MiniChip("−0.01") { store.trPrice = max(0.01, round2(store.trPrice - 0.01)) }
                             MiniChip("+0.01") { store.trPrice = max(0.01, round2(store.trPrice + 0.01)) }
@@ -1828,7 +1855,8 @@ fun TradeScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("数量" + (if (lot > 1) " (每手$lot)" else " (股)"),
                             fontSize = 10.sp, color = cs.onSurfaceVariant)
-                        Text("${store.trQty}", fontSize = 24.sp, fontWeight = FontWeight.Medium)
+                        Text("${store.trQty}", fontSize = 24.sp, fontWeight = FontWeight.Medium,
+                            maxLines = 1, softWrap = false)
                         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             MiniChip("−$lot") { store.trQty = max(0, store.trQty - lot) }
                             MiniChip("+$lot") {
@@ -2552,7 +2580,8 @@ fun ExchangeScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     modifier = Modifier.transformedHeight(this, spec)) {
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("金额 ${symOf(from)}", fontSize = 10.sp, color = cs.onSurfaceVariant)
-                        Text(f2(amt, 0), fontSize = 24.sp, fontWeight = FontWeight.Medium)
+                        Text(f2(amt, 0), fontSize = 24.sp, fontWeight = FontWeight.Medium,
+                            maxLines = 1, softWrap = false)
                         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             MiniChip("−1000") { amt = max(0.0, amt - 1000) }
                             MiniChip("+1000") { amt += 1000 }
@@ -2591,6 +2620,61 @@ fun ExchangeScreen(store: Store, nav: androidx.navigation.NavHostController) {
                         store.tick++
                     } else store.toast(err)
                 }
+            }
+        }
+    }
+}
+
+/* ---- 图表全屏查看 ---- */
+/** 图表全屏查看: 双击放大/三击退出/双指与表冠无级缩放/拖拽平移 */
+@Composable
+fun ChartFullscreenOverlay(store: Store) {
+    if (!store.chartFullscreen) return
+    val cs = MaterialTheme.colorScheme
+    val view = remember { ChartView() }
+    val code = store.currentCode
+    val q = store.quotes[code]
+    // 每次进入重置视图
+    LaunchedEffect(Unit) { view.reset() }
+
+    Box(
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            // 顶部标题与缩放档位
+            Box(
+                Modifier.fillMaxWidth().padding(top = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                val z = view.scale.value
+                Text(
+                    (q?.name ?: code) + " · " + (if (store.chartFullMode == "day") "日K" else "分时") +
+                        " · ${String.format(java.util.Locale.CHINA, "%.1f", z)}x",
+                    fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.onSurface,
+                    maxLines = 1)
+            }
+            Spacer(Modifier.height(2.dp))
+            // 图表手势区 (占据剩余空间)
+            Box(Modifier.fillMaxSize().weight(1f)) {
+                ChartGestureBox(view = view, onExit = {
+                    buzz(store.ctx); store.chartFullscreen = false
+                }) {
+                    Box(Modifier.fillMaxSize().padding(horizontal = 6.dp),
+                        contentAlignment = Alignment.Center) {
+                        if (store.chartFullMode == "day" && store.candles != null) {
+                            FullscreenCandle(store.candles, view, Modifier.fillMaxSize())
+                        } else {
+                            FullscreenMinute(store.minute, store.minuteVol,
+                                q?.prevClose ?: 0.0, view, Modifier.fillMaxSize())
+                        }
+                    }
+                }
+            }
+            // 底部操作提示
+            Box(Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                contentAlignment = Alignment.Center) {
+                Text("双击放大 · 双指/表冠缩放 · 拖动平移 · 三击退出",
+                    fontSize = 9.sp, color = cs.onSurfaceVariant, maxLines = 1)
             }
         }
     }
