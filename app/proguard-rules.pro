@@ -4,4 +4,4 @@
 -dontwarn kotlinx.coroutines.**
 
 # 保底: 应用自身类不被剥离 (曾因 Manifest 入口包名不匹配导致过度收缩)
--keep class com.tengwear.chaoguwang.** { *; }
+-keep class com.tengwear.chaogu.** { *; }

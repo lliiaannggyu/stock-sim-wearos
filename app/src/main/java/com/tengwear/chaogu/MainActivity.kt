@@ -1,4 +1,4 @@
-package com.tengwear.chaoguwang
+package com.tengwear.chaogu
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -1020,7 +1020,7 @@ class Store(val ctx: Context) {
 
 /** 历史包名链: 换包名时依次尝试, 把旧存档搬进新包 (需同签名) */
 private val OLD_PACKAGES = listOf(
-    "com.tengwear.chaogu",       // v2.4~v2.5
+    "com.tengwear.chaoguwang",   // v2.6~v2.9 (曾误改的包名)
     "com.workbuddy.stocksim"     // v1~v2.3
 )
 

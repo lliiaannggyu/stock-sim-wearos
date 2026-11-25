@@ -1,4 +1,4 @@
-package com.tengwear.chaoguwang
+package com.tengwear.chaogu
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter

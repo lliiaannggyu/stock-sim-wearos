@@ -1,4 +1,4 @@
-package com.tengwear.chaoguwang
+package com.tengwear.chaogu
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf

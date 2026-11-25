@@ -7,15 +7,15 @@ plugins {
 }
 
 android {
-    namespace 'com.tengwear.chaoguwang'
+    namespace 'com.tengwear.chaogu'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.tengwear.chaoguwang'
+        applicationId 'com.tengwear.chaogu'
         minSdk 25
         targetSdk 34
-        versionCode 14
-        versionName '2.9.0'
+        versionCode 15
+        versionName '2.9.1'
     }
 
     buildFeatures { compose true }
