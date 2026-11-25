@@ -2,6 +2,8 @@ plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
     id 'org.jetbrains.kotlin.plugin.compose'
+    // 小米/OPPO 国行手表 Wear Compose 兼容层 (补全 WearHapticFeedbackConstants 等)
+    id 'cc.star0.wear.lib.cnwearoverlay' version '1.2.1'
 }
 
 android {
@@ -12,8 +14,8 @@ android {
         applicationId 'com.tengwear.chaoguwang'
         minSdk 25
         targetSdk 34
-        versionCode 11
-        versionName '2.6.0'
+        versionCode 12
+        versionName '2.7.0'
     }
 
     buildFeatures { compose true }
