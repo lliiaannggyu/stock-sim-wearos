@@ -21,7 +21,7 @@
 - **小米手表5 适配（v2.7）**：接入 [cnwearoverlay](https://github.com/Star-ZER0/cnwearoverlay) 1.2.1 Gradle 插件，自动注入 `com.google.wear.input.WearHapticFeedbackConstants` 桩类、修复国行手表缺少该类导致的 `ClassNotFoundException` 闪退，并适配表冠触觉震动（无需 Xposed、无需改业务代码）
 - **包名 `com.tengwear.chaoguwang`**（v2.6 起；依次自动迁移 `com.tengwear.chaogu`、`com.workbuddy.stocksim` 的存档，需同签名且旧版仍安装）
 - **版本信息与存档备份（v2.6 新增）**：管理页显示版本号/build/包名/迁移状态；「导出备份」把完整存档复制为 Base64 文本，「导入备份」粘贴恢复——换包名、换设备、旧版卸载后都能保住模拟进度
-- **闪退诊断（v2.5 新增）**：全局崩溃捕获，闪退时显示异常堆栈并可复制日志；另提供免混淆诊断版 APK（`com.tengwear.chaoguwang.diag`）排查兼容性问题
+- **闪退诊断（v2.5 新增）**：全局崩溃捕获，闪退时显示异常堆栈并可复制日志
 - **GitHub 应用内更新（v2.3 新增）**：管理页「检查更新」一键查询 GitHub Releases → 比对版本号 → 应用内下载 APK（进度条）→ FileProvider 授权调起系统安装器；无 WebView、不跳浏览器
 - **分时图 + 成交量（v2.4）**：详情页分时走势（30秒自动刷新）带每分钟成交量柱、昨收虚线基准，可切换48日K线
 - **主题种子色**：13 种 Material 种子色（Lab 色彩空间生成整套 Wear M3 ColorScheme，与 AppOpsPro 同款算法），管理页可即时切换
