@@ -804,6 +804,9 @@ class Store(val ctx: Context) {
     val ui = Handler(Looper.getMainLooper())
 
     val quotes = mutableStateMapOf<String, Quote>()
+    /** 实时价格轨迹: 每次报价刷新(3秒)把最新价追加进来, 每个代码一条环形缓冲。
+     *  这是「秒级时效」的主数据源 —— 不依赖易失败的分时接口。 */
+    val liveTrail = HashMap<String, MutableList<Float>>()
     var marketOpen by mutableStateOf(false)
     var tick by mutableStateOf(0)
     var spark by mutableStateOf<List<Float>?>(null)
@@ -891,6 +894,17 @@ class Store(val ctx: Context) {
             ui.post {
                 quotes.putAll(q)
                 marketOpen = open
+                // 累积实时价格轨迹: 价格在变才追加(休市不堆无用点), 供分时曲线秒级刷新
+                for ((c, qt) in q) {
+                    if (qt.price <= 0) continue
+                    val trail = liveTrail.getOrPut(c) { ArrayList(240) }
+                    val p = qt.price.toFloat()
+                    if (trail.isEmpty() || trail.last() != p) {
+                        trail.add(p)
+                        if (trail.size > 240) trail.removeAt(0)
+                    }
+                }
+                tick++
             }
         }.start()
     }
@@ -986,15 +1000,37 @@ class Store(val ctx: Context) {
 
     fun loadMinuteAsync() {
         val code = currentCode
-        minute = null
+        // 不再清空: 分时接口失败时保留上一次成功的数据, 避免降级成静态K线
         Thread {
             val d = market.fetchMinute(code)
             ui.post {
-                if (currentCode == code && d != null) {
+                if (currentCode == code && d != null && d.prices.size >= 2) {
                     minute = d.prices; minuteVol = d.vols; minuteTime = d.time
+                }
+                // 无论接口成功与否, 实时报价轨迹都要更新到 UI (秒级时效的主来源)
+                val trail = liveTrail[code]
+                if (currentCode == code && trail != null && trail.size >= 2) {
+                    liveTrailTick++
                 }
             }
         }.start()
+    }
+
+    /** 实时轨迹版本号: 每次报价累积后 +1, 驱动曲线重组 */
+    var liveTrailTick by mutableStateOf(0)
+        private set
+
+    /** 当前分时曲线数据: 实时轨迹优先(秒级), 否则退回接口分时, 再否则 null */
+    fun minuteDataFor(code: String): Pair<List<Float>, List<Float>>? {
+        val trail = liveTrail[code]
+        if (trail != null && trail.size >= 2) {
+            // 实时轨迹: 用涨跌方向近似生成成交量柱(有价格变动的点记量)
+            val vols = ArrayList<Float>(trail.size)
+            for (i in trail.indices) vols.add(if (i == 0 || trail[i] != trail[i - 1]) 1f else 0.2f)
+            return Pair(trail.toList(), vols)
+        }
+        if (minute != null && minute!!.size >= 2) return Pair(minute!!, minuteVol ?: emptyList())
+        return null
     }
 
     fun searchAsync(kw: String, after: () -> Unit) {
@@ -1491,6 +1527,20 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                         fontSize = 14.sp, fontWeight = FontWeight.Medium,
                         color = upDownColor(q?.changePct ?: 0.0)
                     )
+                    // 行情时间戳 + 刷新状态: 明确展示时效性 (休市时显示休市+最后时间)
+                    val ts = q?.time ?: ""
+                    val hhmm = if (ts.length >= 12) ts.substring(8, 10) + ":" + ts.substring(10, 12) + ":" + ts.substring(12, 14) else ""
+                    val age = if (ts.length >= 14) {
+                        try {
+                            val fmt = java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.CHINA)
+                            (System.currentTimeMillis() - fmt.parse(ts)!!.time) / 1000
+                        } catch (_: Exception) { -1 }
+                    } else -1
+                    Text(
+                        if (store.marketOpen) "● 实时刷新 · 行情 $hhmm · 每3秒"
+                        else "○ 休市 · 行情 $hhmm · 每3秒检查",
+                        fontSize = 9.sp,
+                        color = if (store.marketOpen) cs.primary else cs.onSurfaceVariant)
                 }
             }
             item(key = "chart") {
@@ -1520,8 +1570,9 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        if (chartMode == "min" && store.minute != null) {
-                            MinuteChart(store.minute, store.minuteVol, q?.prevClose ?: 0.0,
+                        val md = store.minuteDataFor(code)
+                        if (chartMode == "min" && md != null) {
+                            MinuteChart(md.first, md.second, q?.prevClose ?: 0.0,
                                 Modifier.fillMaxWidth().height(72.dp))
                         } else if (chartMode == "day" && store.candles != null) {
                             CandleChart(store.candles, Modifier.fillMaxWidth().height(72.dp))
@@ -1530,14 +1581,15 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                                 Modifier.fillMaxWidth().height(72.dp))
                         }
                     }
+                    val tText = store.liveTrail[code]?.size?.let { "${it}点" } ?: ""
                     Text(
                         when {
-                            chartMode == "min" && store.minuteTime.isNotBlank() ->
-                                "双击放大 · ${store.minuteTime} · 5秒刷新"
-                            chartMode == "min" -> "双击放大 · 5秒刷新"
+                            chartMode == "min" ->
+                                "双击放大 · ${if (store.marketOpen) "实时" else "休市"} · 3秒刷新 $tText"
                             else -> "双击放大 · 48日K · 30秒刷新"
                         },
-                        fontSize = 9.sp, color = cs.onSurfaceVariant)
+                        fontSize = 9.sp,
+                        color = if (store.marketOpen) cs.primary else cs.onSurfaceVariant)
                 }
             }
             item {
@@ -2704,6 +2756,7 @@ fun ChartFullscreenOverlay(store: Store) {
     val view = remember { ChartView() }
     val code = store.currentCode
     val q = store.quotes[code]
+    @Suppress("UNUSED_VARIABLE") val refreshTick = store.tick  // 报价3秒刷新→轨迹更新→触发曲线重组
     // 每次进入重置视图, 并在全屏下持续自动刷新数据 (分时10秒 / 日K30秒 / 报价3秒)
     LaunchedEffect(Unit) {
         view.reset()
@@ -2744,10 +2797,11 @@ fun ChartFullscreenOverlay(store: Store) {
                 ChartGestureBox(view = view, onExit = {
                     buzz(store.ctx); store.chartFullscreen = false
                 }) {
+                    val md = store.minuteDataFor(code)
                     if (store.chartFullMode == "day" && store.candles != null) {
                         FullscreenCandle(store.candles, view, Modifier.fillMaxSize())
-                    } else if (store.minute != null) {
-                        FullscreenMinute(store.minute, store.minuteVol,
+                    } else if (md != null) {
+                        FullscreenMinute(md.first, md.second,
                             q?.prevClose ?: 0.0, view, Modifier.fillMaxSize())
                     } else {
                         // 数据尚未加载: 主动拉取, 避免全屏后一片空白「加载不出图像」
