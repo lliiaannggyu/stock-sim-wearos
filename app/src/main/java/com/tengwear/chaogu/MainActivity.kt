@@ -885,6 +885,34 @@ class Store(val ctx: Context) {
 
     fun toast(m: String) { toastMsg = m }
 
+    /** 最后一次焦点刷新的时间戳 (ms), 详情页显示秒级跳动 */
+    var lastFocusMs by mutableStateOf(0L)
+
+    /** 焦点刷新: 只拉当前正在查看的股票, 1秒级, 时效性最高的通道 */
+    fun refreshFocusAsync() {
+        val c = currentCode
+        Thread {
+            try {
+                val q = market.fetchQuotes(listOf(c))
+                ui.post {
+                    if (q.isEmpty()) return@post
+                    quotes.putAll(q)
+                    val qt = q[c] ?: return@post
+                    if (qt.price > 0) {
+                        val trail = liveTrail.getOrPut(c) { ArrayList(240) }
+                        val p = qt.price.toFloat()
+                        if (trail.isEmpty() || trail.last() != p) {
+                            trail.add(p)
+                            if (trail.size > 240) trail.removeAt(0)
+                        }
+                    }
+                    lastFocusMs = System.currentTimeMillis()
+                    tick++
+                }
+            } catch (_: Exception) {}
+        }.start()
+    }
+
     fun refreshQuotesAsync() {
         Fx.refreshIfNeeded()   // 每5分钟拉一次实时汇率
         val codes = allCodes()
@@ -1106,10 +1134,14 @@ class MainActivity : ComponentActivity() {
         loopMatch(store)
     }
 
+    private var cycle = 0
     private fun loopQuotes(store: Store) {
         if (!running) return
-        store.refreshQuotesAsync()
-        handler.postDelayed({ loopQuotes(store) }, 3000)
+        cycle++
+        // 焦点分层: 当前查看的股票每秒单独刷 (免费快照源的最快时效), 全量每3秒一批
+        store.refreshFocusAsync()
+        if (cycle % 3 == 0) store.refreshQuotesAsync()
+        handler.postDelayed({ loopQuotes(store) }, 1000)
     }
 
     private fun loopMatch(store: Store) {
@@ -1517,9 +1549,25 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
             item {
                 Column(Modifier.fillMaxWidth().transformedHeight(this, spec),
                     horizontalAlignment = Alignment.CenterHorizontally) {
+                    // 价格变动闪烁: 每秒焦点刷新, 价格一变立刻高亮脉冲 (涨红跌绿)
+                    var flashUp by remember { mutableStateOf(false) }
+                    var flashDown by remember { mutableStateOf(false) }
+                    val prevP = remember { mutableStateOf(0.0) }
+                    LaunchedEffect(q?.price) {
+                        val p = q?.price ?: 0.0
+                        if (prevP.value > 0 && p != prevP.value) {
+                            if (p > prevP.value) flashUp = true else flashDown = true
+                            kotlinx.coroutines.delay(700)
+                            flashUp = false; flashDown = false
+                        }
+                        prevP.value = p
+                    }
+                    val hot = flashUp || flashDown
                     Text(
-                        if (q != null) Mk.sym(code) + f2(q.price) else "—",
-                        fontSize = 34.sp, fontWeight = FontWeight.Medium,
+                        (if (flashUp) "▲" else if (flashDown) "▼" else "") +
+                            (if (q != null) Mk.sym(code) + f2(q.price) else "—"),
+                        fontSize = 34.sp,
+                        fontWeight = if (hot) FontWeight.Bold else FontWeight.Medium,
                         color = upDownColor(q?.changePct ?: 0.0)
                     )
                     Text(
@@ -1530,15 +1578,12 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     // 行情时间戳 + 刷新状态: 明确展示时效性 (休市时显示休市+最后时间)
                     val ts = q?.time ?: ""
                     val hhmm = if (ts.length >= 12) ts.substring(8, 10) + ":" + ts.substring(10, 12) + ":" + ts.substring(12, 14) else ""
-                    val age = if (ts.length >= 14) {
-                        try {
-                            val fmt = java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.CHINA)
-                            (System.currentTimeMillis() - fmt.parse(ts)!!.time) / 1000
-                        } catch (_: Exception) { -1 }
-                    } else -1
+                    val lastUp = if (store.lastFocusMs > 0)
+                        java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
+                            .format(java.util.Date(store.lastFocusMs)) else "--:--:--"
                     Text(
-                        if (store.marketOpen) "● 实时刷新 · 行情 $hhmm · 每3秒"
-                        else "○ 休市 · 行情 $hhmm · 每3秒检查",
+                        if (store.marketOpen) "● 实时1秒级 · 行情$hhmm · 我方刷新$lastUp"
+                        else "○ 休市 · 行情$hhmm · 1秒级检查 $lastUp",
                         fontSize = 9.sp,
                         color = if (store.marketOpen) cs.primary else cs.onSurfaceVariant)
                 }
@@ -1585,7 +1630,7 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     Text(
                         when {
                             chartMode == "min" ->
-                                "双击放大 · ${if (store.marketOpen) "实时" else "休市"} · 3秒刷新 $tText"
+                                "双击放大 · ${if (store.marketOpen) "实时1秒级" else "休市"} · $tText"
                             else -> "双击放大 · 48日K · 30秒刷新"
                         },
                         fontSize = 9.sp,
@@ -2757,14 +2802,13 @@ fun ChartFullscreenOverlay(store: Store) {
     val code = store.currentCode
     val q = store.quotes[code]
     @Suppress("UNUSED_VARIABLE") val refreshTick = store.tick  // 报价3秒刷新→轨迹更新→触发曲线重组
-    // 每次进入重置视图, 并在全屏下持续自动刷新数据 (分时10秒 / 日K30秒 / 报价3秒)
+    // 每次进入重置视图; 报价由全局1秒焦点循环负责, 这里只管分时/K线数据
     LaunchedEffect(Unit) {
         view.reset()
         var n = 0
         while (true) {
             kotlinx.coroutines.delay(3_000)
             n++
-            store.refreshQuotesAsync()
             if (n % 4 == 0) {   // 每12秒
                 if (store.chartFullMode == "day") store.loadCandlesAsync()
                 else store.loadMinuteAsync()
