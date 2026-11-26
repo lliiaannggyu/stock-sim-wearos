@@ -1437,7 +1437,7 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
     val code = store.currentCode
     val q = store.quotes[code]
     val ctx = LocalContext.current
-    // 图表模式与自动刷新: 分时每30秒 / 日K每5分钟
+    // 图表模式与自动刷新: 分时每5秒 / 日K每30秒 (分秒级)
     var chartMode by rememberSaveable { mutableStateOf("min") }
     LaunchedEffect(code) {
             store.loadMinuteAsync()
@@ -1445,10 +1445,10 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
             store.loadCandlesAsync()
             var n = 0
             while (true) {
-                kotlinx.coroutines.delay(30_000)
+                kotlinx.coroutines.delay(5_000)
                 n++
                 store.loadMinuteAsync()
-                if (n % 10 == 0) { store.loadSparkAsync(); store.loadCandlesAsync() }
+                if (n % 6 == 0) { store.loadSparkAsync(); store.loadCandlesAsync() }
             }
     }
     ScreenScaffold(scrollState = listState) { contentPadding ->
@@ -1533,9 +1533,9 @@ fun DetailScreen(store: Store, nav: androidx.navigation.NavHostController) {
                     Text(
                         when {
                             chartMode == "min" && store.minuteTime.isNotBlank() ->
-                                "双击放大 · ${store.minuteTime}"
-                            chartMode == "min" -> "双击放大 · 分时"
-                            else -> "双击放大 · 48日K"
+                                "双击放大 · ${store.minuteTime} · 5秒刷新"
+                            chartMode == "min" -> "双击放大 · 5秒刷新"
+                            else -> "双击放大 · 48日K · 30秒刷新"
                         },
                         fontSize = 9.sp, color = cs.onSurfaceVariant)
                 }
@@ -2704,8 +2704,20 @@ fun ChartFullscreenOverlay(store: Store) {
     val view = remember { ChartView() }
     val code = store.currentCode
     val q = store.quotes[code]
-    // 每次进入重置视图
-    LaunchedEffect(Unit) { view.reset() }
+    // 每次进入重置视图, 并在全屏下持续自动刷新数据 (分时10秒 / 日K30秒 / 报价3秒)
+    LaunchedEffect(Unit) {
+        view.reset()
+        var n = 0
+        while (true) {
+            kotlinx.coroutines.delay(3_000)
+            n++
+            store.refreshQuotesAsync()
+            if (n % 4 == 0) {   // 每12秒
+                if (store.chartFullMode == "day") store.loadCandlesAsync()
+                else store.loadMinuteAsync()
+            }
+        }
+    }
 
     Box(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
@@ -2725,17 +2737,25 @@ fun ChartFullscreenOverlay(store: Store) {
             }
             Spacer(Modifier.height(2.dp))
             // 图表手势区 (占据剩余空间)
-            Box(Modifier.fillMaxSize().weight(1f)) {
+            // 注意: 只写 weight(1f) 不要叠加 fillMaxSize(), 否则在 Column 中高度测量冲突,
+            // 画布被拉伸导致宽高比变形; 手势层与画布层必须完全重合, 不能再套 padding,
+            // 否则触点坐标与 Canvas 坐标不一致, 缩放锚点错位。
+            Box(Modifier.fillMaxWidth().weight(1f)) {
                 ChartGestureBox(view = view, onExit = {
                     buzz(store.ctx); store.chartFullscreen = false
                 }) {
-                    Box(Modifier.fillMaxSize().padding(horizontal = 6.dp),
-                        contentAlignment = Alignment.Center) {
-                        if (store.chartFullMode == "day" && store.candles != null) {
-                            FullscreenCandle(store.candles, view, Modifier.fillMaxSize())
-                        } else {
-                            FullscreenMinute(store.minute, store.minuteVol,
-                                q?.prevClose ?: 0.0, view, Modifier.fillMaxSize())
+                    if (store.chartFullMode == "day" && store.candles != null) {
+                        FullscreenCandle(store.candles, view, Modifier.fillMaxSize())
+                    } else if (store.minute != null) {
+                        FullscreenMinute(store.minute, store.minuteVol,
+                            q?.prevClose ?: 0.0, view, Modifier.fillMaxSize())
+                    } else {
+                        // 数据尚未加载: 主动拉取, 避免全屏后一片空白「加载不出图像」
+                        LaunchedEffect(Unit) {
+                            store.loadMinuteAsync(); store.loadCandlesAsync(); store.refreshQuotesAsync()
+                        }
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("图表加载中…", fontSize = 11.sp, color = cs.onSurfaceVariant)
                         }
                     }
                 }

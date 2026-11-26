@@ -40,24 +40,28 @@ class ChartView {
     val scale = Animatable(1f)
     val pan = Animatable(Offset.Zero, Offset.VectorConverter)
 
-    /** 一次手势帧: 以 point 为中心缩放 zoomFactor 倍并平移 panDelta (跟手, 无动画) */
+    /**
+     * 绘制模型统一为「左上角原点」: 屏幕坐标 = 内容坐标 * s + pan (pivot=0)。
+     * 因此以屏幕点 point 为锚缩放时, 保持其下方内容点不动:
+     *   pan' = point * (1 - ratio) + pan * ratio
+     * (旧代码错误地减去了中心 c, 那是 pivot=中心 的公式, 与 pivot=0 的绘制不匹配,
+     *  导致放大后图像被推到屏幕外 —— 表现为「放大后加载不出图像」。)
+     */
     suspend fun transform(point: Offset, panDelta: Offset, zoomFactor: Float, size: Size) {
         val old = scale.value
         val target = (old * zoomFactor).coerceIn(1f, MAX_SCALE)
-        val ratio = target / old
-        val c = Offset(size.width / 2f, size.height / 2f)
-        val nt = (point - c) * (1f - ratio) + pan.value * ratio + panDelta
+        val ratio = if (old > 0f) target / old else 1f
+        val nt = point * (1f - ratio) + pan.value * ratio + panDelta
         scale.snapTo(target)
         pan.snapTo(clampPan(nt, size, target))
     }
 
-    /** 以屏幕上 point 为中心平滑缩放 */
+    /** 以屏幕上 point 为中心平滑缩放 (point 为相对 Canvas 左上角的绝对坐标) */
     suspend fun zoomAround(point: Offset, canvasSize: Size, newScale: Float, animated: Boolean) {
         val old = scale.value
         val target = newScale.coerceIn(1f, MAX_SCALE)
-        val c = Offset(canvasSize.width / 2f, canvasSize.height / 2f)
-        val ratio = target / old
-        val nt = (point - c) * (1f - ratio) + pan.value * ratio
+        val ratio = if (old > 0f) target / old else 1f
+        val nt = point * (1f - ratio) + pan.value * ratio
         if (animated) {
             coroutineScope {
                 launch { scale.animateTo(target, spring()) }
@@ -69,11 +73,19 @@ class ChartView {
         }
     }
 
-    /** 限制平移: 放大后最多把边缘拖到视野附近, 防止图表被拖丢 */
+    /**
+     * 限制平移: 内容绘制在 [0,W]x[0,H], 放大 s 倍后屏幕宽度为 W*s。
+     * 要能把内容「右边缘」拖到屏幕右缘 => pan.x = -W*(s-1);
+     * 要能把内容「左边缘」拖到屏幕左缘 => pan.x = 0。
+     * 所以合法区间是 [-W*(s-1), 0] (单向!), 再加少量回弹余量。
+     * 旧代码用对称区间 ±W*(s-1)/2, 只能拖到一半 —— 即「限位无法滑到边缘」。
+     */
     private fun clampPan(p: Offset, size: Size, s: Float): Offset {
-        val mx = size.width * (s - 1f) / 2f + size.width * 0.12f
-        val my = size.height * (s - 1f) / 2f + size.height * 0.12f
-        return Offset(p.x.coerceIn(-mx, mx), p.y.coerceIn(-my, my))
+        val minX = -size.width * (s - 1f) - size.width * 0.10f
+        val minY = -size.height * (s - 1f) - size.height * 0.10f
+        val maxX = size.width * 0.10f
+        val maxY = size.height * 0.10f
+        return Offset(p.x.coerceIn(minX, maxX), p.y.coerceIn(minY, maxY))
     }
 
     suspend fun reset() {
@@ -112,9 +124,14 @@ fun ChartGestureBox(
     Box(
         Modifier
             .fillMaxSize()
-            // 表冠无级缩放 (以视图中心为锚)
+            // 表冠无级缩放 (以触点/视图中心为锚)
+            // 三星/部分国产表表冠产生的是 horizontalScrollPixels 而非 vertical,
+            // 故两个分量都读, 取绝对值较大者, 否则三星表上表冠完全无反应。
             .onRotaryScrollEvent { ev ->
-                val factor = max(0.85f, min(1.18f, 1f - ev.verticalScrollPixels / 600f))
+                val v = ev.verticalScrollPixels
+                val h = ev.horizontalScrollPixels
+                val px = if (kotlin.math.abs(h) > kotlin.math.abs(v)) h else v
+                val factor = (1f + px / 180f).coerceIn(0.78f, 1.28f)
                 if (canvasSize.value != Size.Zero) {
                     val c = Offset(canvasSize.value.width / 2f, canvasSize.value.height / 2f)
                     scope.launch { view.transform(c, Offset.Zero, factor, canvasSize.value) }
